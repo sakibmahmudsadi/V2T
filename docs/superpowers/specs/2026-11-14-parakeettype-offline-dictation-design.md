@@ -241,6 +241,7 @@ IDLE ──hotkey──► RECORDING ──hotkey──► TRANSCRIBING ──do
   "append_trailing_space": true,
   "auto_submit": false,
   "mic_button_edge": "right",       // "right" | "left"
+  "final_text_in_tooltip": true,    // show the finished text in the button's tooltip
   "log_level": "info",
   "log_path": "logs/parakeettype.log"
 }
