@@ -67,8 +67,8 @@ network chatter stop immediately while ParakeetType is built:
 |---|---|
 | Capture | WASAPI, default input device, shared-mode, mono **16 kHz float32** (the model's native rate) |
 | Starts | **Immediately** on hotkey press — before and during the model load |
-| Buffer | In-memory ring buffer of float32 samples (≈64 KB/s of audio) |
-| Endpointing | Manual (second hotkey press) only. **VAD auto-stop is off by default** so a slow speaker is never cut off; it is a one-line config flip (`vad_autostop`) if wanted later |
+| Buffer | **Dynamic, not a fixed length.** The buffer exists for exactly as long as the model needs to load into RAM — however long that is, however long the user keeps talking. It grows on demand (64 KB/s of float32) and is capped at `max_buffer_seconds` (default 120 s ≈ 7.7 MB). Nothing is lost while the model loads. |
+| Endpointing | Manual (second hotkey press, or clicking the mic button) only. **VAD auto-stop is off by default** so a slow speaker is never cut off; it is a one-line config flip (`vad_autostop`) if wanted later |
 
 ### 3.3 Model
 
@@ -100,13 +100,17 @@ network chatter stop immediately while ParakeetType is built:
 | Trailing space | Appended by default (`append_trailing_space: true`) |
 | Auto-submit | `Enter` after the text — **off** by default |
 
-### 3.6 UI
+### 3.6 UI — one mic button, nothing else
 
 | Feature | Behaviour |
 |---|---|
-| Tray icon | **One mic icon.** Idle = neutral mic; recording = mic with a red/accent badge; transcribing = mic with a busy badge. Tooltip shows state and the model status |
-| Overlay | Small always-on-top, click-through panel (bottom-centre by default) showing state and the **live transcript as it is produced**. Toggleable (`overlay: true \| false`) |
-| No webview | No HTML/JS runtime, no embedded browser. Native Win32 only |
+| Nothing shown | The app shows **no UI at all** while idle: no tray icon, no panel, no overlay, no window. It is invisible until you press the hotkey |
+| Mic button | On dictation start, a small **mic button appears docked to the right edge of the screen** (vertically centred, always-on-top, click-through everywhere except the button itself) |
+| Stop | **Clicking the mic button stops the recording** (same as pressing the hotkey again). The button is the only control the user needs |
+| Button states | Idle grey mic → recording (red/accent, gently pulsing) → working (busy badge while the model decodes) → back to invisible |
+| Right-click | Right-click the mic button → quit the app. (This is the only exit path; there is no tray icon.) |
+| No text overlay | The transcript is **not** displayed on screen. It goes straight into the focused window when it is finished. (Config flag `show_transcript_button_tip` may put the final text in the button's tooltip.) |
+| Errors | A failure turns the mic button amber and puts the reason in its tooltip. No dialogs, no popups, no sound |
 
 ### 3.7 Offline guarantee
 
@@ -126,10 +130,10 @@ network chatter stop immediately while ParakeetType is built:
 Two processes, mirroring Handy's proven split:
 
 ```
-  ParakeetType.exe  (controller, always on)
+  ParakeetType.exe  (controller, always on, ~4-8 MB)
     ├─ hotkey thread      WH_KEYBOARD_LL hook, Right Ctrl + Right Alt
-    ├─ tray + overlay     native Win32, no webview
-    ├─ audio thread       WASAPI capture → ring buffer → chunk queue
+    ├─ mic button        created ONLY while dictating; docked to the right edge
+    ├─ audio thread       WASAPI capture → dynamic ring buffer → chunk queue
     └─ worker supervisor  spawns / reaps the model worker
              │  (named pipe, JSON lines)
              ▼
@@ -137,9 +141,14 @@ Two processes, mirroring Handy's proven split:
     └─ transcribe.dll → ggml → Parakeet RNN‑T
 ```
 
-**Why two processes:** the controller stays at ~8 MB and never holds model pages, so it stays
+**Why two processes:** the controller stays at a few MB and never holds model pages, so it stays
 snappy and can survive a model crash (the worker is simply restarted). The worker holds ~870 MB
 only while the model is loaded and exits 60 s after the last use, so idle RAM is genuinely idle.
+
+**Why the controller is kept tiny:** it does the least possible work — listen for two keys, move
+PCM bytes, show one button, tell the worker what to do. No webview, no tray icon, no icon
+resources, no overlay window while idle, no threads that spin. Target: ≤ 8 MB resident, expected
+4–6 MB.
 
 **Single-process alternative** (one exe, model loaded in-process) was rejected: after a model
 load the whole app's RSS is ~870 MB, and reloading the model would restart the hotkey listener.
@@ -150,18 +159,22 @@ The controller/worker split keeps the always-on part tiny, which is the whole po
 ```
 t=0.00  hotkey press
         ├─ audio capture starts  ──────────────────────────────► ring buffer
-        └─ worker spawn + model load (background)              [≈1 s, mmap'd GGUF]
-        overlay: "● recording  0:01"
+        │  (buffer grows as long as the model needs; NOT a fixed 5 s)
+        ├─ mic button appears on the right edge of the screen
+        └─ worker spawn + model load (background)              [mmap'd GGUF]
+           the load is I/O + page-in on the CPU; its duration is
+           exactly what the buffer is sized for
 
-t=1.0   model ready
+t=load  model ready
         └─ buffered audio replayed into the live stream as fast as the model consumes it
-           (10 s of audio ≈ 1 s of compute)  → overlay shows live text
+           (10 s of audio ≈ 1 s of compute)  → mic button shows the busy badge
 
 t=0..N  user speaks; stream keeps up in real time
 
-t=N     hotkey press again (or Esc to cancel)
+t=N     hotkey press again, or click the mic button (Esc cancels)
         └─ stream finalise → text → filler words removed → trailing space
-           → SendInput into the focused window → overlay shows final text ~1 s
+           → SendInput into the focused window → button briefly shows the
+             final text in its tooltip
 
 t=N+60  worker exits, ~870 MB returned
 ```
@@ -174,13 +187,30 @@ t=N+60  worker exits, ~870 MB returned
 | `abi` | Load `transcribe.dll` via `LoadLibrary`+`GetProcAddress`; declare the C ABI subset; validate `transcribe_version()` == 0.4.0 and cross-check every struct with `transcribe_abi_struct_size()` | `transcribe.dll` |
 | `model_host` | Worker-process logic: model load, session, live stream, batch fallback, text extraction | `abi` |
 | `pipe` | Controller↔worker protocol (JSON lines over a named pipe): `load`, `stream_begin`, `feed`, `finalize`, `cancel`, `shutdown` | — |
-| `audio` | WASAPI capture → mono 16 kHz float32 → ring buffer + chunk queue | `mmdevapi`, `ole32` |
+| `audio` | WASAPI capture → mono 16 kHz float32 → growing ring buffer + chunk queue | `mmdevapi`, `ole32` |
 | `hotkey` | `WH_KEYBOARD_LL` hook; right/left-aware modifier combo; press/release events | `user32` |
-| `vad` | Optional energy-based silence detection for `vad_autostop` (no extra model) | — |
 | `type_text` | `SendInput` Unicode typing into the focused window; trailing space; optional auto-submit | `user32` |
-| `overlay` | Click-through topmost panel: state + live text | `user32`, `gdi32` |
-| `tray` | `Shell_NotifyIcon` mic icon with state variants + tooltip | `shell32` |
+| `mic_button` | The one visible thing: a small always-on-top, click-through window docked to the right edge, drawn from a runtime-generated icon; state colours; tooltip | `user32`, `gdi32` |
+| `text` | Filler-word removal, trailing space, whitespace tidy-up — pure functions, no platform code | — |
 | `main` | Wiring, state machine, idle timer, worker lifecycle | all of the above |
+
+### 4.3.1 Portability layering (Windows first, Linux later)
+
+The code is written **simple and modular**, with all platform-specific calls confined to a thin
+backend layer, so a Linux port means writing new backends — not rewriting the app:
+
+```
+  core/     config · state machine · pipe protocol · text rules · timing
+            (plain C++17, no OS headers, no platform assumptions)
+  platform/ hotkey · audio · typing · mic_button   ← interface + win32 impl
+  worker/   model host (links the engine; portable to Linux unchanged)
+```
+
+Each `platform/` backend is one interface with a Win32 implementation. Porting to Linux means
+implementing the same four interfaces (evdev hotkey, PipeWire/PulseAudio capture, X11/Wayland
+typing, a small GTK/Qt button) and changing nothing else. Rule for the port: **Windows
+efficiency first** — a module that is slightly heavier on Windows but keeps the port clean is
+acceptable; a module that bloats the Windows controller is not.
 
 ### 4.4 Controller state machine
 
@@ -198,26 +228,26 @@ IDLE ──hotkey──► RECORDING ──hotkey──► TRANSCRIBING ──do
 ```jsonc
 {
   "model_path": "C:/Users/SADI/.cache/huggingface/hub/models--handy-computer--parakeet-unified-en-0.6b-gguf/snapshots/7e948f21b7bdbac698d3318db9d350f1096f3b6c/parakeet-unified-en-0.6b-Q8_0.gguf",
-  "engine_dir": "W:/TOOLS/portable app/ParakeetType/engine",   // transcribe.dll + ggml*.dll
+  "engine_dir": "W:/Pipeline/V2T/engine",           // transcribe.dll + ggml*.dll
   "backend": "cpu",                 // "cpu" | "vulkan"
   "hotkey": ["rctrl", "ralt"],      // tap to toggle
   "cancel_key": "esc",
   "device": null,                   // null = system default input device
   "model_unload_seconds": 60,       // worker exits after this much inactivity
+  "max_buffer_seconds": 120,        // hard cap on the audio buffer (≈7.7 MB)
   "vad_autostop": false,            // manual stop by default
   "filler_removal": true,
   "filler_words": ["uh","uhm","umm","uhh","uhhh","ehh","ehm","ahm","hmm","hm","mmm","um","ah","eh"],
   "append_trailing_space": true,
   "auto_submit": false,
-  "overlay": true,
-  "tray": true,
+  "mic_button_edge": "right",       // "right" | "left"
   "log_level": "info",
   "log_path": "logs/parakeettype.log"
 }
 ```
 
 Unknown keys are ignored; a missing file yields defaults; the model path is the only required
-value (the app refuses to start without it, and says so in the tray tooltip).
+value (the app refuses to start without it and says so in the log).
 
 ---
 
@@ -225,10 +255,10 @@ value (the app refuses to start without it, and says so in the tray tooltip).
 
 | State | RAM | Notes |
 |---|---|---|
-| Idle (controller only) | ~8 MB target, ≤20 MB acceptable | no mic open, no model, no worker |
-| Recording, model loading | ~8 MB + worker ramp | audio buffered in RAM (64 KB/s) |
-| Recording, model loaded | ~8 MB + ~870 MB | same weights Handy loads today |
-| 60 s after last transcription | back to ~8 MB | worker exits, model pages released |
+| Idle (controller only) | **≤ 8 MB target, ~4–6 MB expected** | no mic open, no model, no worker, no visible UI |
+| Recording, model loading | ~5 MB + growing buffer | buffer grows only as fast as you speak (64 KB/s) |
+| Recording, model loaded | ~5 MB + ~870 MB | same weights Handy loads today |
+| 60 s after last transcription | back to ~5 MB | worker exits, model pages released |
 | Disk | engine DLLs ~100 MB (ggml-vulkan 43 MB optional) + model 731 MB (referenced, not copied) | |
 
 CPU: the RNN‑T decode of 10 s of audio is ≈1 s of one core. No keep-alive spin — the controller
@@ -245,7 +275,9 @@ sleeps on a message loop and the worker is idle-blocked between requests.
 | Artifacts | `ParakeetType.exe` (controller) + `ParakeetTypeWorker.exe` (worker), ~200–400 KB each |
 | Engine payload | `transcribe.dll`, `ggml*.dll`, `msvcp140*.dll`, `vcruntime140*.dll` copied from the Handy folder into `engine/` so the tool is self-contained. `onnxruntime.dll` is **not** needed (Silero VAD v6.2 runs on ggml) |
 | Model | Referenced from the existing Hugging Face cache path — not copied (731 MB) |
-| Layout | `W:\TOOLS\portable app\ParakeetType\` |
+| Layout | Project root: `W:\Pipeline\V2T\` |
+| Repository | `W:\Pipeline\V2T\` (git). `AGENTS.md` holds the working agreement for agents on this repo; the spec lives in `docs/superpowers/specs/` |
+| Source layout | `src/core/` (portable logic) · `src/platform/win32/` (Windows backends) · `src/worker/` (model host) · `src/controller/` · `tools/` (scripts) · `engine/` (runtime DLLs, git-ignored) |
 | Rust alternative | The same C ABI works from Rust (`transcribe-cpp` crate) if the C++ build stalls; not required |
 
 ---
@@ -254,14 +286,15 @@ sleeps on a message loop and the worker is idle-blocked between requests.
 
 | Failure | Behaviour |
 |---|---|
-| Model file missing / unreadable | Tray tooltip + overlay error; no crash; hotkey stays live |
+| Model file missing / unreadable | Mic button turns amber with the reason in its tooltip; no crash; hotkey stays live |
 | `transcribe.dll` missing or wrong ABI version | Hard, explicit error at startup ("engine DLL version mismatch") |
-| Model load fails | Recording continues; on stop the overlay reports the failure; no text typed |
-| Worker crashes mid-take | Supervisor restarts it; the take is lost gracefully; overlay reports it |
+| Model load fails | Recording continues; on stop the mic button turns amber with the reason; no text typed |
+| Worker crashes mid-take | Supervisor restarts it; the take is lost gracefully; button reports it |
 | Stream returns empty text | Automatic one-shot batch transcription of the buffer (Handy's own fallback) |
-| Audio device lost / no mic | Overlay/tray error, no crash |
-| Target window elevated (admin) | `SendInput` cannot reach it — the overlay says "cannot type into an elevated window" instead of silently failing |
+| Audio device lost / no mic | Mic button turns amber; no crash |
+| Target window elevated (admin) | `SendInput` cannot reach it — the button's tooltip says "cannot type into an elevated window" instead of silently failing |
 | Text longer than expected | Typed in chunks with a small inter-chunk delay to avoid input queue overflow |
+| Buffer cap reached | Recording stops cleanly at `max_buffer_seconds` and transcribes what was captured |
 
 ---
 
@@ -270,12 +303,15 @@ sleeps on a message loop and the worker is idle-blocked between requests.
 1. **Golden-corpus accuracy** — the 7 WAVs already in
    `%APPDATA%\com.pais.handy\recordings\` plus their transcripts in `history.db` form a
    regression corpus: ParakeetType must produce the same text as Handy for the same audio.
-2. **Latency** — measured: hotkey → first overlay text; hotkey → text inserted.
-3. **Load time** — measured worker-side model load (mmap expected ≈0.3–1.5 s).
+2. **Latency** — measured: hotkey → text inserted; hotkey → model ready.
+3. **Load time** — measured worker-side model load (mmap expected ≈0.3–1.5 s). This number sets
+   how long the dynamic buffer has to hold.
 4. **Memory** — `tasklist` RSS in idle / recording / post-idle states vs. the budget in §6.
 5. **Offline proof** — REA `inspect_pe_imports` on both built exes: assert no networking DLL.
 6. **Hotkey correctness** — right Ctrl + Right Alt only (left Ctrl + Right Alt must not trigger).
 7. **Cancel** — Esc discards the take and types nothing.
+8. **UI contract** — nothing visible while idle; mic button appears docked right on press; a
+   click on it stops; the button disappears afterwards.
 
 ---
 
@@ -284,10 +320,11 @@ sleeps on a message loop and the worker is idle-blocked between requests.
 | # | Milestone | Outcome |
 |---|---|---|
 | 0 | Disable Handy's updater | **Done** (2026-11-13) |
-| 1 | `abi` + `model_host` + CLI mode (`--file in.wav`) | Transcribes a WAV offline via `transcribe.dll`, text matches Handy on the golden corpus |
+| 0.5 | `AGENTS.md` + repo skeleton + build script | Working agreement for agents; `cmake`/`ninja` build of an empty exe; `engine/` populated from the Handy folder |
+| 1 | `abi` + `model_host` + CLI mode (`--file in.wav`) | Transcribes a WAV offline via `transcribe.dll`, text matches Handy on the golden corpus; model-load time measured |
 | 2 | `audio` (WASAPI) + `hotkey` + `type_text` | Full tap-to-toggle dictation with keystroke insertion |
-| 3 | Controller/worker split + 60 s idle unload | Resident ~870 MB only while needed; controller stays ~8 MB |
-| 4 | Live streaming + catch-up replay + overlay + tray mic states | Live text in the overlay, final text typed at the cursor |
+| 3 | Controller/worker split + 60 s idle unload | Resident ~870 MB only while needed; controller stays ≤8 MB |
+| 4 | Live streaming + catch-up replay + mic button | Live text while you talk; click the button to stop; final text typed at the cursor |
 | 5 | Filler-word removal, trailing space, config file, autostart, packaging | Shippable portable tool |
 | 6 | Optional hardening | Firewall block rules; retire Handy |
 
@@ -301,7 +338,7 @@ sleeps on a message loop and the worker is idle-blocked between requests.
 | `mmap` load time longer than assumed | Measure in Milestone 1; if slow, the buffer+catch-up design still hides it (the user talks for ≥5 s anyway) |
 | GPU/Vulkan instability | CPU is the default; Vulkan is opt-in and off by default |
 | Right Ctrl / Right Alt conflicts with other software | Combo is configurable; documented in the README |
-| Elevated target windows reject synthetic input | Detected and reported in the overlay |
+| Elevated target windows reject synthetic input | Detected and reported on the mic button |
 
 ---
 
