@@ -1,4 +1,4 @@
-// ParakeetType controller — the always-on process.
+// V2T controller — the always-on process.
 //
 // Right Ctrl + Right Alt starts recording; press it again (or click the mic
 // button) to stop, and the finished text is typed at the cursor.
@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <memory>
@@ -97,7 +98,19 @@ bool g_worker_active = false;  // the worker process holds the model
 // Audio capture -> buffer
 // ---------------------------------------------------------------------------
 
+// The input level, 0..1, used to tell "recording" from "audio is arriving".
+std::atomic<float> g_input_level{0.0f};
+
 void on_audio(const float* samples, size_t count) {
+  // Root mean square of the chunk: cheap, and enough to show that the
+  // microphone is picking you up.
+  double sum = 0.0;
+  for (size_t i = 0; i < count; ++i) {
+    sum += static_cast<double>(samples[i]) * samples[i];
+  }
+  const float rms = count > 0 ? static_cast<float>(std::sqrt(sum / count)) : 0.0f;
+  g_input_level = rms;
+
   std::lock_guard<std::mutex> lock(g_shared.mutex);
   const size_t cap = static_cast<size_t>(g_config.max_buffer_seconds) * 16000;
   if (g_shared.buffer.size() + count > cap) {
@@ -113,7 +126,7 @@ void on_audio(const float* samples, size_t count) {
 // ---------------------------------------------------------------------------
 
 std::string worker_path() {
-  return pt::win32::join_path(pt::win32::exe_dir(), "ParakeetTypeWorker.exe");
+  return pt::win32::join_path(pt::win32::exe_dir(), "V2TWorker.exe");
 }
 
 // The engine DLL the worker loads. The engine folder sits next to the
@@ -207,7 +220,10 @@ void worker_thread_main() {
 
       // Idle timer: the worker keeps the model between takes, and exits once
       // nothing has happened for model_unload_seconds.
-      if (!g_shared.start_requested && !g_shared.stop_requested && g_worker_active) {
+      if (!g_shared.start_requested && !g_shared.stop_requested && g_worker_active &&
+          !g_shared.capturing) {
+        // Never unload the model while the user is still talking: that would
+        // destroy the take in progress.
         const auto idle = std::chrono::steady_clock::now() - g_shared.last_activity;
         if (idle >= std::chrono::seconds(g_config.model_unload_seconds)) {
           lock.unlock();
@@ -225,37 +241,46 @@ void worker_thread_main() {
       std::unique_lock<std::mutex> lock(g_shared.mutex);
       g_shared.start_requested = false;
 
-      std::string error;
-      if (!g_worker.start(worker_path(), g_pipe_name, g_config.backend, engine_dll_path(),
-                          error)) {
-        PT_ERROR("cannot start the worker: " + error);
+      // The worker keeps the model between takes (it exits when the model
+      // goes idle). Reusing it means the second take starts instantly —
+      // no process spawn, no model load, no gigabyte of re-allocation.
+      if (!g_worker.is_running()) {
+        std::string error;
+        if (!g_worker.start(worker_path(), g_pipe_name, g_config.backend, engine_dll_path(),
+                            error)) {
+          PT_ERROR("cannot start the worker: " + error);
+          lock.unlock();
+          post_result(false, std::string(), error);
+          continue;
+        }
+        g_worker_active = true;
         lock.unlock();
-        post_result(false, std::string(), error);
-        continue;
-      }
-      g_worker_active = true;
-      lock.unlock();
 
-      // Load the model. The audio keeps accumulating in the buffer meanwhile.
-      const json::ValuePtr load = json::make_object();
-      json::set(load, "cmd", json::make_string("load"));
-      json::set(load, "model", json::make_string(g_config.model_path));
-      std::string reply;
-      if (!g_worker.send_control(json::stringify(*load), error) ||
-          !g_worker.read_control(reply, error)) {
-        PT_ERROR("the worker did not load the model: " + error);
-        post_result(false, std::string(), error);
-        continue;
+        // Load the model. The audio keeps accumulating in the buffer meanwhile.
+        const json::ValuePtr load = json::make_object();
+        json::set(load, "cmd", json::make_string("load"));
+        json::set(load, "model", json::make_string(g_config.model_path));
+        std::string reply;
+        if (!g_worker.send_control(json::stringify(*load), error) ||
+            !g_worker.read_control(reply, error)) {
+          PT_ERROR("the worker did not load the model: " + error);
+          post_result(false, std::string(), error);
+          continue;
+        }
+        std::string reason;
+        if (reply_failed(reply, reason)) {
+          PT_ERROR("the worker could not load the model: " + reason);
+          post_result(false, std::string(), reason);
+          continue;
+        }
+        PT_INFO("model ready");
+      } else {
+        lock.unlock();
+        PT_INFO("reusing the worker (the model is already loaded)");
       }
-      std::string reason;
-      if (reply_failed(reply, reason)) {
-        PT_ERROR("the worker could not load the model: " + reason);
-        post_result(false, std::string(), reason);
-        continue;
-      }
-      PT_INFO("model ready");
 
       std::string begin_reply;
+      std::string reason;
       if (!send_command("begin", begin_reply) || reply_failed(begin_reply, reason)) {
         post_result(false, std::string(), "the worker refused to start the stream");
         continue;
@@ -298,17 +323,9 @@ void worker_thread_main() {
         }
         if (text.empty()) {
           // The stream found nothing: fall back to a one-shot decode of the
-          // whole take (Handy does the same).
+          // same audio (Handy does the same). The worker already has the
+          // audio, so nothing is sent twice.
           PT_INFO("the live stream produced no text; falling back to a batch decode");
-          std::vector<float> whole;
-          {
-            std::lock_guard<std::mutex> audio_lock(g_shared.mutex);
-            whole = g_shared.buffer;
-          }
-          if (!whole.empty()) {
-            std::string error;
-            g_worker.send_audio(whole.data(), whole.size(), error);
-          }
           if (send_command("batch", reply)) {
             std::string reason;
             if (!reply_failed(reply, reason)) text = reply_text(reply);
@@ -365,6 +382,10 @@ void start_dictation() {
     return;
   }
 
+  {
+    std::lock_guard<std::mutex> lock(g_shared.mutex);
+    g_shared.last_activity = std::chrono::steady_clock::now();
+  }
   g_shared.state = AppState::Recording;
   std::string show_error;
   if (!g_mic.show(g_config.mic_button_edge, show_error)) {
@@ -378,6 +399,7 @@ void stop_dictation(bool cancelled) {
   if (g_shared.state != AppState::Recording) return;
 
   g_audio.stop();
+  g_input_level = 0.0f;
   {
     std::lock_guard<std::mutex> lock(g_shared.mutex);
     g_shared.capturing = false;
@@ -455,6 +477,16 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
       return 0;
     }
 
+    case WM_TIMER:
+      if (g_shared.state == AppState::Recording) {
+        // Green while the microphone is picking you up, grey when it is not.
+        const bool loud = g_input_level.load() > 0.008f;
+        g_mic.set_state(loud ? pt::win32::MicButtonState::Active
+                             : pt::win32::MicButtonState::Idle,
+                        loud ? "listening" : "recording");
+      }
+      return 0;
+
     case WM_DESTROY:
       PostQuitMessage(0);
       return 0;
@@ -483,7 +515,7 @@ int main(int argc, char** argv) {
       config_path = argv[++i];
     } else if (arg == "--help" || arg == "-h") {
       std::fprintf(stderr,
-                   "ParakeetType controller\n"
+                   "V2T controller\n"
                    "  --config <path>   configuration file (default: config.json next to the exe)\n");
       return 0;
     }
@@ -514,7 +546,7 @@ int main(int argc, char** argv) {
   }
   pt::log_set_file(log_path);
   pt::log_set_level(pt::LogLevel::Info);
-  PT_INFO("ParakeetType controller starting");
+  PT_INFO("V2T controller starting");
 
   // A hidden message window: the hotkey hook and the mic button talk to it.
   WNDCLASSEXW window_class;
@@ -522,10 +554,10 @@ int main(int argc, char** argv) {
   window_class.cbSize = sizeof(window_class);
   window_class.lpfnWndProc = &window_proc;
   window_class.hInstance = GetModuleHandleW(nullptr);
-  window_class.lpszClassName = L"ParakeetTypeController";
+  window_class.lpszClassName = L"V2TController";
   RegisterClassExW(&window_class);
 
-  g_window = CreateWindowExW(0, L"ParakeetTypeController", L"", WS_OVERLAPPEDWINDOW, 0, 0, 1, 1,
+  g_window = CreateWindowExW(0, L"V2TController", L"", WS_OVERLAPPEDWINDOW, 0, 0, 1, 1,
                              nullptr, nullptr, window_class.hInstance, nullptr);
   if (g_window == nullptr) {
     std::fprintf(stderr, "error: cannot create the controller window\n");
@@ -547,7 +579,10 @@ int main(int argc, char** argv) {
       [] { PostMessage(g_window, WM_APP_STOP, 0, 0); },
       [] { PostMessage(g_window, WM_APP_QUIT, 0, 0); });
 
-  g_pipe_name = "parakeettype-" + std::to_string(GetCurrentProcessId());
+  // 10 Hz is plenty for the level meter and costs nothing.
+  SetTimer(g_window, 1, 100, nullptr);
+
+  g_pipe_name = "v2t-" + std::to_string(GetCurrentProcessId());
   g_worker_thread = std::thread(worker_thread_main);
 
   MSG message;

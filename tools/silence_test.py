@@ -22,7 +22,7 @@ sys.path.insert(0, str(REPO / "tools"))
 
 from ipc_test import (DEFAULT_MODEL, kernel32, read_json, write_frame)  # noqa: E402
 
-DEFAULT_WORKER = REPO / "build" / "ParakeetTypeWorker.exe"
+DEFAULT_WORKER = REPO / "build" / "V2TWorker.exe"
 
 
 def main() -> int:
@@ -32,7 +32,7 @@ def main() -> int:
     parser.add_argument("--seconds", type=float, default=5.0)
     args = parser.parse_args()
 
-    pipe_name = "parakeettype-silence-test"
+    pipe_name = "v2t-silence-test"
     handle = kernel32.CreateNamedPipeW(
         "\\\\.\\pipe\\" + pipe_name, 3, 0, 1, 65536, 65536, 0, None)
     if handle is None:

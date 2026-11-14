@@ -17,7 +17,8 @@ namespace pt {
 namespace win32 {
 
 enum class MicButtonState {
-  Idle,       // shown while recording, waiting
+  Idle,       // recording, but no audio is arriving
+  Active,     // audio is arriving
   Working,    // the model is decoding
   Attention,  // something went wrong (the tooltip says what)
 };

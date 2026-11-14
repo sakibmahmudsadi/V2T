@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ParakeetType CXX)
+project(V2T CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,20 +49,20 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
-# ParakeetTypeWorker — the model host.
+# V2TWorker — the model host.
 # ---------------------------------------------------------------------------
-add_executable(ParakeetTypeWorker
+add_executable(V2TWorker
   src/worker/main.cpp
 )
-target_include_directories(ParakeetTypeWorker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(V2TWorker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # ptwin32 depends on ptcore, so it comes first for the static linker.
-target_link_libraries(ParakeetTypeWorker PRIVATE ptwin32 ptcore)
+target_link_libraries(V2TWorker PRIVATE ptwin32 ptcore)
 
 # ---------------------------------------------------------------------------
-# ParakeetType — the always-on controller.
+# V2T — the always-on controller.
 # ---------------------------------------------------------------------------
-add_executable(ParakeetType
+add_executable(V2T
   src/controller/main.cpp
 )
-target_include_directories(ParakeetType PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ParakeetType PRIVATE ptwin32 ptcore)
+target_include_directories(V2T PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(V2T PRIVATE ptwin32 ptcore)

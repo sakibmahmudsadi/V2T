@@ -1,11 +1,11 @@
-# AGENTS.md — working agreement for ParakeetType
+# AGENTS.md — working agreement for V2T
 
-ParakeetType is an **offline voice-typing tool for Windows**. It transcribes speech with the
+V2T is an **offline voice-typing tool for Windows**. It transcribes speech with the
 user's existing local model — NVIDIA Parakeet Unified EN 0.6B (GGUF) — and types the result into
 whatever window has focus. It is deliberately tiny, always-listening for one hotkey, and it
 **never touches the network**.
 
-Spec: `docs/superpowers/specs/2026-11-14-parakeettype-offline-dictation-design.md`
+Spec: `docs/superpowers/specs/2026-11-14-v2t-offline-dictation-design.md`
 Plan: `docs/superpowers/plans/2026-11-14-milestone1-engine-binding.md`
 
 ---
@@ -95,10 +95,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
 # self-test (wav + text + ABI checks)
-build/ParakeetTypeWorker.exe --selftest
+build/V2TWorker.exe --selftest
 
 # transcribe a file offline
-build/ParakeetTypeWorker.exe \
+build/V2TWorker.exe \
   --model "C:/Users/SADI/.cache/huggingface/hub/models--handy-computer--parakeet-unified-en-0.6b-gguf/snapshots/7e948f21b7bdbac698d3318db9d350f1096f3b6c/parakeet-unified-en-0.6b-Q8_0.gguf" \
   --file "C:/Users/SADI/AppData/Roaming/com.pais.handy/recordings/handy-1794595283.wav"
 

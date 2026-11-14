@@ -52,7 +52,7 @@ def worker_pids():
     pids = []
     if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
         while True:
-            if entry.szExeFile == "ParakeetTypeWorker.exe":
+            if entry.szExeFile == "V2TWorker.exe":
                 pids.append(entry.th32ProcessID)
             if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
                 break
@@ -63,7 +63,7 @@ def worker_pids():
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--idle-seconds", type=int, default=5)
-    parser.add_argument("--app", default=str(REPO / "build" / "ParakeetType.exe"))
+    parser.add_argument("--app", default=str(REPO / "build" / "V2T.exe"))
     args = parser.parse_args()
 
     app = Path(args.app)

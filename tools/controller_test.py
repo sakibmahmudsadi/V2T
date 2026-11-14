@@ -13,7 +13,7 @@ that:
 The audio path itself is covered by tools/ipc_test.py with a real recording.
 
 Usage:
-    python tools/controller_test.py [--app build/ParakeetType.exe]
+    python tools/controller_test.py [--app build/V2T.exe]
 """
 
 import argparse
@@ -81,7 +81,7 @@ def find_mic_button():
     The window is created once and hidden between takes, so existence alone
     proves nothing — visibility does.
     """
-    handle = user32.FindWindowW("ParakeetTypeMicButton", None)
+    handle = user32.FindWindowW("V2TMicButton", None)
     if not handle:
         return False
     return user32.IsWindowVisible(handle) != 0
@@ -89,14 +89,14 @@ def find_mic_button():
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--app", default=str(REPO / "build" / "ParakeetType.exe"))
+    parser.add_argument("--app", default=str(REPO / "build" / "V2T.exe"))
     args = parser.parse_args()
 
     app = Path(args.app)
     if not app.exists():
         sys.exit(f"error: the controller is not built ({app})")
 
-    log_paths = [app.parent / "logs" / "parakeettype.log", REPO / "logs" / "parakeettype.log"]
+    log_paths = [app.parent / "logs" / "v2t.log", REPO / "logs" / "v2t.log"]
     for path in log_paths:
         if path.exists():
             path.unlink()
@@ -137,7 +137,28 @@ def main() -> int:
         if not disappeared:
             failures += 1
 
-        # 3. the log records what happened
+        # 3. a second take reuses the worker: the model must NOT be loaded
+        #    again (that is the difference between 1 s and 1.3 s of waiting,
+        #    and a gigabyte of re-allocation)
+        press_combo()
+        time.sleep(2.0)
+        press_combo()
+        time.sleep(3.0)
+
+        log = ""
+        for path in log_paths:
+            if path.exists():
+                log += path.read_text(encoding="utf-8", errors="replace")
+        reused = "reusing the worker" in log
+        loads = log.count("model ready")
+        print(f"  {'ok  ' if reused else 'FAIL'} the second take reuses the loaded model")
+        if not reused:
+            failures += 1
+        print(f"  {'ok  ' if loads <= 1 else 'FAIL'} the model is loaded only once ({loads}x)")
+        if loads > 1:
+            failures += 1
+
+        # 4. the log records what happened
         time.sleep(1.0)
         log = ""
         for path in log_paths:

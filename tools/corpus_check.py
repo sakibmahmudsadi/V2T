@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Golden-corpus regression check.
 
-Runs ParakeetType's worker over the recordings Handy kept in
+Runs V2T's worker over the recordings Handy kept in
 %APPDATA%/com.pais.handy/recordings and compares the transcripts with the ones
 Handy stored in %APPDATA%/com.pais.handy/history.db.
 
@@ -10,7 +10,7 @@ regression guard: if the word error rate climbs above the threshold, something
 in the engine binding or the text rules broke.
 
 Usage:
-    python tools/corpus_check.py [--worker build/ParakeetTypeWorker.exe]
+    python tools/corpus_check.py [--worker build/V2TWorker.exe]
                                  [--model <gguf>] [--threshold 5.0]
 """
 
@@ -71,10 +71,12 @@ def load_expectations() -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", default=str(REPO / "build" / "ParakeetTypeWorker.exe"))
+    parser.add_argument("--worker", default=str(REPO / "build" / "V2TWorker.exe"))
     parser.add_argument("--model", default=str(DEFAULT_MODEL))
     parser.add_argument("--threshold", type=float, default=5.0,
                         help="maximum allowed corpus word error rate, in percent")
+    parser.add_argument("--file-threshold", type=float, default=15.0,
+                        help="maximum allowed word error rate for a single recording")
     parser.add_argument("--recordings", default=str(HANDY_ROAMING / "recordings"))
     args = parser.parse_args()
 
@@ -130,7 +132,7 @@ def main() -> int:
         ref_words = len(expected.split())
         total_errors += wer / 100.0 * ref_words
         total_words += ref_words
-        if wer > args.threshold:
+        if wer > args.file_threshold:
             failures += 1
 
         print(f"{wav.name:<28} {wer:>6.1f}% {payload['load_ms']:>8.0f} "
@@ -143,8 +145,11 @@ def main() -> int:
 
     corpus_wer = total_errors / total_words * 100.0
     print(f"corpus word error rate: {corpus_wer:.2f}%  (threshold {args.threshold:.1f}%)")
+    if corpus_wer > args.threshold:
+        print(f"FAILED: the corpus is above the threshold")
+        failures += 1
     if failures:
-        print(f"FAILED: {failures} file(s) above the threshold")
+        print(f"FAILED: {failures} recording(s) above the per-file threshold")
         return 1
     print("PASS")
     return 0

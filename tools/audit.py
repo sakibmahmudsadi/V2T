@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline audit + memory probe for the ParakeetType binaries.
+"""Offline audit + memory probe for the V2T binaries.
 
 Offline audit: the import table of the executable must contain no networking
 DLL. A program that cannot load ws2_32/winhttp/wininet/urlmon cannot open a
@@ -9,7 +9,7 @@ Memory probe: runs the worker and reports its peak working set, so the RAM
 budget in the spec is backed by a number rather than an estimate.
 
 Usage:
-    python tools/audit.py [--worker build/ParakeetTypeWorker.exe]
+    python tools/audit.py [--worker build/V2TWorker.exe]
 """
 
 import argparse
@@ -73,8 +73,8 @@ def peak_working_set(pid: int) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", default=str(REPO / "build" / "ParakeetTypeWorker.exe"))
-    parser.add_argument("--controller", default=str(REPO / "build" / "ParakeetType.exe"))
+    parser.add_argument("--worker", default=str(REPO / "build" / "V2TWorker.exe"))
+    parser.add_argument("--controller", default=str(REPO / "build" / "V2T.exe"))
     parser.add_argument("--model", default="")
     parser.add_argument("--file", default="")
     args = parser.parse_args()

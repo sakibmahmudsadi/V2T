@@ -43,7 +43,7 @@ struct Config {
   std::string mic_button_edge = "right";
 
   // Log file (relative to the executable folder).
-  std::string log_path = "logs/parakeettype.log";
+  std::string log_path = "logs/v2t.log";
   std::string log_level = "info";
 
   // Path of the config file this was loaded from.

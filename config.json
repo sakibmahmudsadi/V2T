@@ -10,6 +10,6 @@
   "append_trailing_space": true,
   "auto_submit": false,
   "mic_button_edge": "right",
-  "log_path": "logs/parakeettype.log",
+  "log_path": "logs/v2t.log",
   "log_level": "info"
 }

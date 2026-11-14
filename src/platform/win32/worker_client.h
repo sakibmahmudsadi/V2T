@@ -1,6 +1,6 @@
 // Controller side of the worker process.
 //
-// The controller owns a short-lived worker: it spawns ParakeetTypeWorker.exe,
+// The controller owns a short-lived worker: it spawns V2TWorker.exe,
 // talks to it over a named pipe, and lets it exit when the model has been idle
 // for the configured time. That keeps the always-on process free of the ~1 GB
 // the model needs.

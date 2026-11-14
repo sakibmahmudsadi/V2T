@@ -6,7 +6,7 @@ the controller uses, and streams a real recording through it. It proves the
 whole offline path: framed IPC, model load, live streaming decode, finalize.
 
 Usage:
-    python tools/ipc_test.py [--worker build/ParakeetTypeWorker.exe]
+    python tools/ipc_test.py [--worker build/V2TWorker.exe]
                               [--model <gguf>] [--file <wav>]
 """
 
@@ -29,7 +29,7 @@ DEFAULT_MODEL = (
          "/parakeet-unified-en-0.6b-Q8_0.gguf")
 )
 DEFAULT_FILE = Path(
-    "C:/Users/SADI/AppData/Roaming/com.pais.handy/recordings/handy-1794595283.wav")
+    "C:/Users/SADI/AppData/Roaming/com.pais.handy/recordings/handy-1794634700.wav")
 
 PIPE_ACCESS_DUPLEX = 0x00000003
 PIPE_TYPE_BYTE = 0x00000000
@@ -95,7 +95,7 @@ def load_wav_as_float32(path: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", default=str(REPO / "build" / "ParakeetTypeWorker.exe"))
+    parser.add_argument("--worker", default=str(REPO / "build" / "V2TWorker.exe"))
     parser.add_argument("--model", default=str(DEFAULT_MODEL))
     parser.add_argument("--file", default=str(DEFAULT_FILE))
     args = parser.parse_args()
@@ -107,7 +107,7 @@ def main() -> int:
         if not path.exists():
             sys.exit(f"error: {label} not found at {path}")
 
-    pipe_name = "parakeettype-ipctest"
+    pipe_name = "v2t-ipctest"
     handle = kernel32.CreateNamedPipeW(
         f"\\\\.\\pipe\\{pipe_name}", PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 65536, 65536, 0, None)
@@ -158,7 +158,21 @@ def main() -> int:
         text = reply.get("text", "")
         print(f"\ntext   : {text}")
 
-        # 5. shutdown
+        # 5. the batch fallback must decode the audio the worker already has,
+        #    without the controller sending it again
+        write_frame(handle, 1, json.dumps({"cmd": "batch"}).encode())
+        reply = read_json(handle)
+        if not reply.get("ok"):
+            sys.exit(f"error: batch failed: {reply.get('error')}")
+        batch_text = reply.get("text", "")
+        print(f"batch  : {batch_text}")
+        # The batch decode is a different decode path, so its wording may
+        # differ. What matters is that it worked at all: the worker still had
+        # the audio, so the controller did not send it a second time.
+        if not batch_text.strip():
+            sys.exit("error: the batch decode returned nothing")
+
+        # 6. shutdown
         write_frame(handle, 1, json.dumps({"cmd": "shutdown"}).encode())
         read_json(handle)
     finally:

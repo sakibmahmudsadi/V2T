@@ -6,9 +6,9 @@
 finished text is typed at the cursor, and the model unloads 60 s after the last take — all offline,
 with the always-on process staying at a few MB.
 
-**Architecture:** Two processes. The **controller** (`ParakeetType.exe`) is the always-on part:
+**Architecture:** Two processes. The **controller** (`V2T.exe`) is the always-on part:
 keyboard hook, mic capture, the one mic button, keystroke injection — no model, no big buffers.
-The **worker** (`ParakeetTypeWorker.exe`) holds the model and does the decoding. They talk over a
+The **worker** (`V2TWorker.exe`) holds the model and does the decoding. They talk over a
 named pipe with length-prefixed frames. The controller starts recording *immediately* on the hotkey
 and loads the model in the background; the audio that was captured while the model loaded is
 replayed into the live stream as fast as the model consumes it, so nothing is lost and the user

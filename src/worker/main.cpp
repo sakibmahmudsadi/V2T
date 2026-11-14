@@ -1,9 +1,9 @@
-// ParakeetType worker — the model host.
+// V2T worker — the model host.
 //
 // Two modes:
-//   CLI     ParakeetTypeWorker --model <gguf> --file <wav> [--backend cpu|vulkan|auto]
+//   CLI     V2TWorker --model <gguf> --file <wav> [--backend cpu|vulkan|auto]
 //                              [--no-filler] [--json]
-//   Server  ParakeetTypeWorker --serve --pipe <name>   (the controller's worker)
+//   Server  V2TWorker --serve --pipe <name>   (the controller's worker)
 //
 // In server mode the worker owns the model and decodes the audio the
 // controller feeds it, live, over a named pipe. The engine binding and the
@@ -34,13 +34,18 @@ namespace ipc = pt::ipc;
 
 using Clock = std::chrono::steady_clock;
 
+// How much audio is handed to the stream at a time. Handy feeds the frames
+// its VAD produces: 16 ms for Earshot, 32 ms for Silero. 32 ms is the
+// default here because that is what Handy uses with its default backend.
+int g_frame_samples = 512;
+
 double ms_since(Clock::time_point start) {
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
 void usage() {
   std::fprintf(stderr,
-               "ParakeetType worker\n"
+               "V2T worker\n"
                "  --model <gguf>      model file (Parakeet GGUF)\n"
                "  --file <wav>        16-bit or 32-bit float WAV file\n"
                "  --backend <name>    cpu | vulkan | auto (default cpu)\n"
@@ -309,6 +314,9 @@ int run_server(const std::string& pipe_name, const std::string& model_path,
   bool model_loaded = false;
   bool streaming = false;
   std::vector<uint8_t> last_audio;
+  // Every sample the stream received, so a batch retry can decode the same
+  // audio without the controller sending it a second time.
+  std::vector<float> stream_audio;
 
   while (true) {
     uint32_t kind = 0;
@@ -321,6 +329,10 @@ int run_server(const std::string& pipe_name, const std::string& model_path,
       last_audio = payload;
       if (!streaming || payload.empty()) continue;
       const size_t count = payload.size() / sizeof(float);
+      if (count > 0) {
+        const float* samples = reinterpret_cast<const float*>(payload.data());
+        stream_audio.insert(stream_audio.end(), samples, samples + count);
+      }
       std::string feed_error;
       if (!engine.stream_feed(reinterpret_cast<const float*>(payload.data()),
                               static_cast<int>(count), feed_error)) {
@@ -365,6 +377,10 @@ int run_server(const std::string& pipe_name, const std::string& model_path,
         send_json(pipe, reply_error("no model is loaded"));
         continue;
       }
+      // A session that has just been finalised is FINISHED; reset it so a
+      // new take can start on the same loaded model.
+      engine.stream_reset();
+      stream_audio.clear();
       std::string begin_error;
       if (!engine.stream_begin(begin_error)) {
         send_json(pipe, reply_error(begin_error));
@@ -399,16 +415,15 @@ int run_server(const std::string& pipe_name, const std::string& model_path,
     }
 
     if (name == "batch") {
-      // Fallback path: the controller sends the whole buffer as one audio
-      // frame and then asks for a one-shot decode of it.
-      if (!model_loaded || last_audio.empty()) {
+      // Fallback path: decode the audio the stream already received, as one
+      // shot. The controller does not send the audio again.
+      if (!model_loaded || stream_audio.empty()) {
         send_json(pipe, reply_error("no audio to decode"));
         continue;
       }
-      const size_t count = last_audio.size() / sizeof(float);
       std::string run_error;
-      if (!engine.run(reinterpret_cast<const float*>(last_audio.data()),
-                      static_cast<int>(count), run_error)) {
+      if (!engine.run(stream_audio.data(), static_cast<int>(stream_audio.size()),
+                      run_error)) {
         send_json(pipe, reply_error(run_error));
         continue;
       }
@@ -422,6 +437,7 @@ int run_server(const std::string& pipe_name, const std::string& model_path,
       // The take was cancelled: drop the stream and start clean.
       engine.stream_reset();
       streaming = false;
+      stream_audio.clear();
       send_json(pipe, reply_ok());
       continue;
     }
@@ -485,6 +501,14 @@ int main(int argc, char** argv) {
       serve = true;
     } else if (arg == "--pipe") {
       ok = next(pipe_name);
+    } else if (arg == "--frame") {
+      std::string value;
+      if (!next(value)) {
+        std::fprintf(stderr, "missing value for --frame\n");
+        return 2;
+      }
+      g_frame_samples = std::atoi(value.c_str());
+      if (g_frame_samples < 80) g_frame_samples = 80;
     } else if (arg == "--repeat") {
       std::string value;
       if (!next(value)) {
@@ -587,7 +611,7 @@ int main(int argc, char** argv) {
     } else {
       // Live streaming decode: the same path Handy uses for this model, fed
       // in 30 ms frames.
-      constexpr int kFrameSamples = 480;  // 30 ms at 16 kHz
+    const int kFrameSamples = g_frame_samples;
       engine.stream_reset();
       bool ok = engine.stream_begin(err);
       if (ok) {

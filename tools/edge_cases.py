@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Edge-case suite for the ParakeetType worker.
+"""Edge-case suite for the V2T worker.
 
 Every case builds a deliberately awkward input and checks that the worker
 fails cleanly (clear message, non-zero exit) instead of crashing, hanging, or
 silently producing nonsense.
 
 Usage:
-    python tools/edge_cases.py [--worker build/ParakeetTypeWorker.exe]
+    python tools/edge_cases.py [--worker build/V2TWorker.exe]
 """
 
 import argparse
@@ -46,7 +46,7 @@ def tone(seconds, rate=16000, freq=220.0):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", default=str(REPO / "build" / "ParakeetTypeWorker.exe"))
+    parser.add_argument("--worker", default=str(REPO / "build" / "V2TWorker.exe"))
     parser.add_argument("--model", default=str(DEFAULT_MODEL))
     args = parser.parse_args()
 
@@ -54,7 +54,7 @@ def main():
     model = Path(args.model)
 
     failures = 0
-    tmp = Path(tempfile.mkdtemp(prefix="parakeettype-edge-"))
+    tmp = Path(tempfile.mkdtemp(prefix="v2t-edge-"))
 
     def run(files, extra=None):
         cmd = [str(worker), "--model", str(model)] + [str(f) for f in files] + (extra or [])

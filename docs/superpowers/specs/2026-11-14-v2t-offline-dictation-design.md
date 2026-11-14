@@ -1,4 +1,4 @@
-# ParakeetType — offline voice typing on Parakeet Unified EN 0.6B
+# V2T — offline voice typing on Parakeet Unified EN 0.6B
 
 **Date:** 2026-11-14
 **Status:** Design approved in conversation; pending written-spec review
@@ -40,7 +40,7 @@ Evidence gathered during design (2026-11-13/14):
 | Update checks can be force-disabled | Handy source `settings.rs::update_checks_forced_disabled()` honours `HANDY_DISABLE_UPDATER` |
 
 **Phase 0 (done, 2026-11-13):** Handy's updater was disabled three ways so the nag and the
-network chatter stop immediately while ParakeetType is built:
+network chatter stop immediately while V2T is built:
 
 1. user env var `HANDY_DISABLE_UPDATER=1`;
 2. `settings_store.json` → `update_checks_enabled: false`, `show_whats_new_on_update: false`
@@ -119,7 +119,7 @@ network chatter stop immediately while ParakeetType is built:
 | The app makes no network calls | The binary is built with no networking imports at all; verified after the build with REA `inspect_pe_imports` (expect no `ws2_32`, `winhttp`, `wininet`, `urlmon`) |
 | No update mechanism exists | There is no updater code to disable — nothing to phone home to |
 | Model is local | Loaded from a local path; the app has no download logic |
-| Optional hard block | Windows Firewall outbound-block rules can be added for `ParakeetType.exe` and `handy.exe` (needs Administrator; offered as a separate, clearly-labelled step) |
+| Optional hard block | Windows Firewall outbound-block rules can be added for `V2T.exe` and `handy.exe` (needs Administrator; offered as a separate, clearly-labelled step) |
 
 ---
 
@@ -130,14 +130,14 @@ network chatter stop immediately while ParakeetType is built:
 Two processes, mirroring Handy's proven split:
 
 ```
-  ParakeetType.exe  (controller, always on, ~4-8 MB)
+  V2T.exe  (controller, always on, ~4-8 MB)
     ├─ hotkey thread      WH_KEYBOARD_LL hook, Right Ctrl + Right Alt
     ├─ mic button        created ONLY while dictating; docked to the right edge
     ├─ audio thread       WASAPI capture → dynamic ring buffer → chunk queue
     └─ worker supervisor  spawns / reaps the model worker
              │  (named pipe, JSON lines)
              ▼
-  ParakeetTypeWorker.exe  (model host, exists only while needed)
+  V2TWorker.exe  (model host, exists only while needed)
     └─ transcribe.dll → ggml → Parakeet RNN‑T
 ```
 
@@ -243,7 +243,7 @@ IDLE ──hotkey──► RECORDING ──hotkey──► TRANSCRIBING ──do
   "mic_button_edge": "right",       // "right" | "left"
   "final_text_in_tooltip": true,    // show the finished text in the button's tooltip
   "log_level": "info",
-  "log_path": "logs/parakeettype.log"
+  "log_path": "logs/v2t.log"
 }
 ```
 
@@ -273,7 +273,7 @@ sleeps on a message loop and the worker is idle-blocked between requests.
 |---|---|
 | Language | **C++17**, Win32 API — no runtime, no framework, no webview. Built with the `clang`/`gcc`/`cmake`/`ninja` already installed in `C:\mingw64\bin` (MSVC toolchain is *not* installed, so MinGW is the build path) |
 | Linking | `transcribe.dll` is loaded at runtime via `LoadLibrary`+`GetProcAddress` — no import lib needed, and the ABI version is validated at runtime |
-| Artifacts | `ParakeetType.exe` (controller) + `ParakeetTypeWorker.exe` (worker), ~200–400 KB each |
+| Artifacts | `V2T.exe` (controller) + `V2TWorker.exe` (worker), ~200–400 KB each |
 | Engine payload | `transcribe.dll`, `ggml*.dll`, `msvcp140*.dll`, `vcruntime140*.dll` copied from the Handy folder into `engine/` so the tool is self-contained. `onnxruntime.dll` is **not** needed (Silero VAD v6.2 runs on ggml) |
 | Model | Referenced from the existing Hugging Face cache path — not copied (731 MB) |
 | Layout | Project root: `W:\Pipeline\V2T\` |
@@ -303,7 +303,7 @@ sleeps on a message loop and the worker is idle-blocked between requests.
 
 1. **Golden-corpus accuracy** — the 7 WAVs already in
    `%APPDATA%\com.pais.handy\recordings\` plus their transcripts in `history.db` form a
-   regression corpus: ParakeetType must produce the same text as Handy for the same audio.
+   regression corpus: V2T must produce the same text as Handy for the same audio.
 2. **Latency** — measured: hotkey → text inserted; hotkey → model ready.
 3. **Load time** — measured worker-side model load (mmap expected ≈0.3–1.5 s). This number sets
    how long the dynamic buffer has to hold.

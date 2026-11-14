@@ -1,6 +1,8 @@
-# ParakeetType
+# V2T
 
 Offline voice typing for Windows, driven by the Parakeet Unified EN 0.6B model you already have.
+
+*Voice to text, entirely on your machine. No network, no updater, no model downloads.*
 
 Press **Right Ctrl + Right Alt**, speak, press again — the text appears at your cursor. No network,
 no updater, no model downloads. The transcription runs on your own machine through the same
@@ -15,22 +17,26 @@ memory 60 seconds after each take.
 ## How it works
 
 ```
-ParakeetType.exe          the always-on process — 7 MB, no model, no microphone open
+V2T.exe          the always-on process — 7 MB, no model, no microphone open
   ├─ Right Ctrl+Right Alt hook      (WH_KEYBOARD_LL, right/left aware)
   ├─ microphone capture             (waveIn, 16 kHz mono, into a growing buffer)
   ├─ the mic button                 (one small button docked to the right edge)
   └─ keystroke injection            (SendInput, Unicode — the clipboard is never touched)
         │  named pipe, framed messages
         ▼
-ParakeetTypeWorker.exe    the model host — 1.05 GB while it holds the model
+V2TWorker.exe    the model host — 1.05 GB while it holds the model
   └─ transcribe.dll → ggml → Parakeet RNN-T
 ```
 
 - Pressing the hotkey **starts recording immediately** and loads the model in the background.
   The audio captured while the model loads is replayed into the live stream as soon as it is
   ready, so nothing is lost and you never wait for a load.
-- The mic button appears docked to the **right edge** of the screen while you talk. Click it (or
-  press the hotkey again) to stop; `Esc` cancels. Nothing is visible while the app is idle.
+- The mic button appears docked to the **right edge** of the screen while you talk. It is **grey
+  while the microphone is quiet and green while your voice is arriving** — one colour tells you
+  whether the app is hearing you. Click it (or press the hotkey again) to stop; `Esc` cancels.
+  Nothing is visible while the app is idle.
+- **The model is loaded once and reused.** The worker keeps it between takes and exits 60 seconds
+  after the last one, so the second take starts instantly instead of paying a fresh model load.
 - The finished text is typed at the cursor. Filler words (`uh uhm umm uhh uhhh ehh ehm ahm hmm hm
   mmm um ah eh`) are removed.
 - 60 seconds after the last take the worker exits and its ~1 GB goes back to the operating system.
@@ -41,8 +47,8 @@ ParakeetTypeWorker.exe    the model host — 1.05 GB while it holds the model
 
 ```bash
 cd W:\Pipeline\V2T
-bash tools/build_release.sh        # -> dist/ParakeetType/
-dist/ParakeetType/ParakeetType.exe
+bash tools/build_release.sh        # -> dist/V2T/
+dist/V2T/V2T.exe
 ```
 
 `config.json` (next to the executable) holds the model path and the settings:
@@ -72,7 +78,8 @@ The controller also takes `--config <path>`.
 | Controller, idle | **7.2 MB** |
 | Controller while recording | 12.4 MB (the audio buffer) |
 | Worker while it holds the model | 1054 MB |
-| Model load (mmap) | ~1.0–1.3 s, covered by the audio buffer |
+| Model load (mmap) | ~0.9–1.3 s, once per worker; covered by the audio buffer |
+| Second take | starts instantly — the worker is reused, the model is not reloaded |
 | Decode | 2.6–3.9× faster than real time, so the text is ready the moment you stop |
 | Binary size | 3.0 MB controller + 0.9 MB worker (static CRT, no runtime dependencies) |
 | Import table | `kernel32.dll` + UCRT only — **no networking DLL** |
@@ -88,8 +95,8 @@ The model host is also a plain CLI, which is handy for checking things:
 
 ```bash
 MODEL="C:/Users/SADI/.cache/huggingface/hub/models--handy-computer--parakeet-unified-en-0.6b-gguf/snapshots/7e948f21b7bdbac698d3318db9d350f1096f3b6c/parakeet-unified-en-0.6b-Q8_0.gguf"
-build/ParakeetTypeWorker.exe --model "$MODEL" --file "recording.wav" [--json] [--batch] [--repeat N]
-build/ParakeetTypeWorker.exe --selftest
+build/V2TWorker.exe --model "$MODEL" --file "recording.wav" [--json] [--batch] [--repeat N]
+build/V2TWorker.exe --selftest
 ```
 
 ---
@@ -133,6 +140,15 @@ Handy decodes this model with the **live streaming** path; a one-shot batch run 
 different text (it truncates and drops punctuation). We use the same path — `transcribe_stream_begin`
 → `transcribe_stream_feed` in 30 ms frames → `transcribe_stream_finalize` — and fall back to a batch
 run only when a stream yields nothing, which is what Handy does too.
+
+## Known differences from Handy
+
+- **The live stream sees every sample; Handy only feeds it the frames its VAD marks as speech.**
+  That is the one remaining source of wording differences (about 1.5 % of words on the golden
+  corpus). Wiring the Silero VAD in would close it — the model is already available as
+  `silero-vad-v6.2-F32.gguf`.
+- The stream frame size (32 ms) does not change the result: a sweep over 10–60 ms gives the same
+  word error rate (`tools/frame_sweep.py`).
 
 ## Known limitations
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prove that ParakeetType's inference path works fully offline by binding `transcribe.dll` from the Handy install and transcribing WAV files from the command line, matching Handy's own output on the golden corpus.
+**Goal:** Prove that V2T's inference path works fully offline by binding `transcribe.dll` from the Handy install and transcribing WAV files from the command line, matching Handy's own output on the golden corpus.
 
 **Architecture:** A `src/engine/transcribe_api` module owns the entire C ABI surface (`LoadLibrary` + `GetProcAddress`, no import lib). A `src/worker` binary is a thin CLI over it: it loads a GGUF model, opens a session, runs one WAV, prints the transcript. `src/core` holds portable, OS-free code (WAV decoding, text rules) so the same code can be reused by the controller in Milestone 2–3 and ported to Linux later.
 
@@ -55,7 +55,7 @@ All 33 steps are done and verified. Results:
 | `src/worker/main.cpp` | CLI: `--model`, `--file`, `--backend`, `--no-filler`, `--json`, `--selftest` |
 | `tools/corpus_check.py` | Runs the worker over the golden corpus, diffs against `history.db`, reports WER |
 | `tools/setup_engine.sh` | Copies the engine DLLs out of the Handy install into `engine/` |
-| `CMakeLists.txt` | Builds `ParakeetTypeWorker.exe` (controller arrives in Milestone 2) |
+| `CMakeLists.txt` | Builds `V2TWorker.exe` (controller arrives in Milestone 2) |
 | `AGENTS.md` | Working agreement for agents on this repo |
 
 ## ABI facts this plan relies on (verified against the published 0.4.0 header)
@@ -83,7 +83,7 @@ All 33 steps are done and verified. Results:
 - [x] **Step 1: Write `AGENTS.md`** — project purpose, the offline rule, ABI contract, build/test commands, module boundaries, the Windows-first/Linux-portable rule, and the commit convention.
 - [x] **Step 2: Write `tools/setup_engine.sh`** — copy `transcribe.dll`, `ggml*.dll`, `msvcp140*.dll`, `vcruntime140*.dll` from `W:/TOOLS/portable app/Handy` into `engine/`. Must **not** copy `onnxruntime.dll` (not needed: Silero VAD runs on ggml).
 - [x] **Step 3: Run it** — `bash tools/setup_engine.sh` → expect `engine/` with 13 DLLs; `ls engine/ | wc -l` prints 13.
-- [x] **Step 4: Write `CMakeLists.txt`** — C++17, `project(ParakeetType CXX)`, one static lib `ptcore` (core+engine sources, no OS deps) and one exe `ParakeetTypeWorker` linking `ptcore`. Static CRT + libgcc/libstdc++ so the exe is standalone.
+- [x] **Step 4: Write `CMakeLists.txt`** — C++17, `project(V2T CXX)`, one static lib `ptcore` (core+engine sources, no OS deps) and one exe `V2TWorker` linking `ptcore`. Static CRT + libgcc/libstdc++ so the exe is standalone.
 - [x] **Step 5: Commit**
 
 ```bash
@@ -106,8 +106,8 @@ git add -A && git commit -m "chore: repo skeleton, AGENTS.md, engine payload scr
 - [x] **Step 4: `src/core/log.h`/`.cpp`** — `set_level`, `set_file`, `info/warn/error` macros writing to stderr and the log file.
 - [x] **Step 5: Write `src/worker/main.cpp` skeleton** that only parses `--selftest` and exercises wav+text on synthetic data (no engine yet). Build it:
   `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build`
-  → expect `build/ParakeetTypeWorker.exe`.
-- [x] **Step 6: Run `build/ParakeetTypeWorker.exe --selftest`** → expect `selftest: OK`.
+  → expect `build/V2TWorker.exe`.
+- [x] **Step 6: Run `build/V2TWorker.exe --selftest`** → expect `selftest: OK`.
 - [x] **Step 7: Commit**
 
 ```bash
@@ -154,7 +154,7 @@ git add -A && git commit -m "feat(engine): transcribe.dll C ABI binding with ver
   filler removal → whitespace tidy → trailing space → print (plain or JSON with
   `raw`, `text`, `load_ms`, `run_ms`, `audio_seconds`).
 - [x] **Step 3: Run it on a golden WAV** —
-  `build/ParakeetTypeWorker.exe --model "<gguf>" --file "C:/Users/SADI/AppData/Roaming/com.pais.handy/recordings/handy-1794595283.wav"`
+  `build/V2TWorker.exe --model "<gguf>" --file "C:/Users/SADI/AppData/Roaming/com.pais.handy/recordings/handy-1794595283.wav"`
   → expect `Also if possible make the controller smaller` (Handy's own transcript).
 - [x] **Step 4: Commit**
 
@@ -191,7 +191,7 @@ git add -A && git commit -m "test: golden-corpus regression against Handy's hist
   mapped to readable messages via `transcribe_status_string`.
 - [x] **Step 3: Memory** — run the worker on a 60 s file and check RSS stays bounded (no leak of the
   session); run it twice in one process to make sure `close_session` frees the model.
-- [x] **Step 4: Offline proof** — `python -c "import pefile; ..."` on `build/ParakeetTypeWorker.exe`:
+- [x] **Step 4: Offline proof** — `python -c "import pefile; ..."` on `build/V2TWorker.exe`:
   assert the import list contains no `ws2_32.dll`, `winhttp.dll`, `wininet.dll`, `urlmon.dll`.
 - [x] **Step 5: Re-run the corpus check** → still ≤ 5 % WER.
 - [x] **Step 6: Commit**
@@ -218,4 +218,4 @@ git add -A && git commit -m "docs: README with usage and measurements"
 
 Hotkey, microphone capture, mic button, controller/worker split, live streaming, filler list
 tuning, packaging. Those are Milestones 2–5 in
-`docs/superpowers/specs/2026-11-14-parakeettype-offline-dictation-design.md`.
+`docs/superpowers/specs/2026-11-14-v2t-offline-dictation-design.md`.

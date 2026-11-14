@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copies the inference engine out of the Handy install into ./engine so
-# ParakeetType is self-contained and never needs Handy's folder at runtime.
+# V2T is self-contained and never needs Handy's folder at runtime.
 #
 # What is copied:
 #   transcribe.dll        transcribe-cpp v0.4.0  (the C ABI we bind)
