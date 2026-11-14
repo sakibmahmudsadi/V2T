@@ -10,6 +10,40 @@
 
 ---
 
+## Status: complete (2026-11-14)
+
+All 33 steps are done and verified. Results:
+
+| Check | Result |
+|---|---|
+| `--selftest` | `selftest: OK` (engine 0.4.0, both struct sizes verified) |
+| `python tools/corpus_check.py` | **0.00 % corpus word error rate** — 5/5 recordings match Handy's stored transcripts word for word |
+| `python tools/edge_cases.py` | 13/13 malformed inputs handled with a clear message, no crashes |
+| `python tools/audit.py` | import table = `kernel32.dll` + UCRT only; **no networking DLL**; peak working set 1.09 GB with the model loaded |
+
+### Deviations from the plan (all forced by evidence)
+
+1. **The engine needs an explicit backend-init call.** `transcribe_init_backends_default()` must
+   run before the first model load; without it the load fails with
+   "parakeet: failed to initialize CPU backend". Added as `Engine::init_backends()`.
+2. **The decode path has to be the live stream.** The plan's one-shot batch run produced 7.5 % WER
+   (truncated text, missing punctuation). Handy decodes this model with the live streaming path,
+   so we do too: `stream_begin` → `feed` in 480-sample (30 ms) frames → `finalize` → `get_text`.
+   The batch run stays as the fallback for an empty stream. Result: 0.00 % WER.
+3. **The shipped DLL is not the published crate.** It reports 32 bytes for `transcribe_stream_text`
+   (published: 64) and 16 for `transcribe_backend_init_params` (published: 24). The binding
+   therefore trusts the DLL's own `transcribe_abi_struct_size()` and uses the `struct_size` prefix
+   protocol; `transcribe_backend_init_params` is not used at all.
+4. **ggml finds its backends by scanning a directory.** `transcribe_init_backends_default()`
+   resolves the folder of `transcribe.dll` itself, so the payload stays in `engine/`.
+   `SetDllDirectoryA` + `LOAD_WITH_ALTERED_SEARCH_PATH` make the DLL dependencies resolve.
+5. **`TRANSCRIBE_BACKENDS` must be set before the process starts** (the engine's CRT caches the
+   environment when the DLL loads). Milestone 3 sets it in the worker's environment when the
+   controller spawns the worker. It keeps the GPU driver out of the process — worth ~26 MB of
+   working set and, more importantly, removes the "broken GPU driver kills the process" risk.
+
+---
+
 ## File structure
 
 | Path | Responsibility |
@@ -46,11 +80,11 @@
 **Files:**
 - Create: `AGENTS.md`, `CMakeLists.txt`, `.gitignore` (already), `tools/setup_engine.sh`
 
-- [ ] **Step 1: Write `AGENTS.md`** — project purpose, the offline rule, ABI contract, build/test commands, module boundaries, the Windows-first/Linux-portable rule, and the commit convention.
-- [ ] **Step 2: Write `tools/setup_engine.sh`** — copy `transcribe.dll`, `ggml*.dll`, `msvcp140*.dll`, `vcruntime140*.dll` from `W:/TOOLS/portable app/Handy` into `engine/`. Must **not** copy `onnxruntime.dll` (not needed: Silero VAD runs on ggml).
-- [ ] **Step 3: Run it** — `bash tools/setup_engine.sh` → expect `engine/` with 13 DLLs; `ls engine/ | wc -l` prints 13.
-- [ ] **Step 4: Write `CMakeLists.txt`** — C++17, `project(ParakeetType CXX)`, one static lib `ptcore` (core+engine sources, no OS deps) and one exe `ParakeetTypeWorker` linking `ptcore`. Static CRT + libgcc/libstdc++ so the exe is standalone.
-- [ ] **Step 5: Commit**
+- [x] **Step 1: Write `AGENTS.md`** — project purpose, the offline rule, ABI contract, build/test commands, module boundaries, the Windows-first/Linux-portable rule, and the commit convention.
+- [x] **Step 2: Write `tools/setup_engine.sh`** — copy `transcribe.dll`, `ggml*.dll`, `msvcp140*.dll`, `vcruntime140*.dll` from `W:/TOOLS/portable app/Handy` into `engine/`. Must **not** copy `onnxruntime.dll` (not needed: Silero VAD runs on ggml).
+- [x] **Step 3: Run it** — `bash tools/setup_engine.sh` → expect `engine/` with 13 DLLs; `ls engine/ | wc -l` prints 13.
+- [x] **Step 4: Write `CMakeLists.txt`** — C++17, `project(ParakeetType CXX)`, one static lib `ptcore` (core+engine sources, no OS deps) and one exe `ParakeetTypeWorker` linking `ptcore`. Static CRT + libgcc/libstdc++ so the exe is standalone.
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "chore: repo skeleton, AGENTS.md, engine payload script"
@@ -61,20 +95,20 @@ git add -A && git commit -m "chore: repo skeleton, AGENTS.md, engine payload scr
 **Files:**
 - Create: `src/core/wav.h`, `src/core/wav.cpp`, `src/core/text.h`, `src/core/text.cpp`, `src/core/log.h`, `src/core/log.cpp`
 
-- [ ] **Step 1: `src/core/wav.h`** — `struct Audio { std::vector<float> samples; int sample_rate = 0; };`
+- [x] **Step 1: `src/core/wav.h`** — `struct Audio { std::vector<float> samples; int sample_rate = 0; };`
   `bool load_wav(const std::string& path, Audio& out, std::string& err);`
   Support: 16-bit PCM and 32-bit float, 1–2 channels, any rate → downmix to mono, linear resample to 16 kHz.
-- [ ] **Step 2: `src/core/wav.cpp`** — parse RIFF chunks (`fmt `, `data`), reject non-PCM/float or missing chunks with a clear error, downmix, resample.
-- [ ] **Step 3: `src/core/text.h`/`.cpp`** —
+- [x] **Step 2: `src/core/wav.cpp`** — parse RIFF chunks (`fmt `, `data`), reject non-PCM/float or missing chunks with a clear error, downmix, resample.
+- [x] **Step 3: `src/core/text.h`/`.cpp`** —
   `std::string remove_filler_words(const std::string& text, const std::vector<std::string>& fillers);`
   Case-insensitive whole-word removal (also consumes a following `,` or `.`), whitespace tidy-up,
   `append_trailing_space`.
-- [ ] **Step 4: `src/core/log.h`/`.cpp`** — `set_level`, `set_file`, `info/warn/error` macros writing to stderr and the log file.
-- [ ] **Step 5: Write `src/worker/main.cpp` skeleton** that only parses `--selftest` and exercises wav+text on synthetic data (no engine yet). Build it:
+- [x] **Step 4: `src/core/log.h`/`.cpp`** — `set_level`, `set_file`, `info/warn/error` macros writing to stderr and the log file.
+- [x] **Step 5: Write `src/worker/main.cpp` skeleton** that only parses `--selftest` and exercises wav+text on synthetic data (no engine yet). Build it:
   `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build`
   → expect `build/ParakeetTypeWorker.exe`.
-- [ ] **Step 6: Run `build/ParakeetTypeWorker.exe --selftest`** → expect `selftest: OK`.
-- [ ] **Step 7: Commit**
+- [x] **Step 6: Run `build/ParakeetTypeWorker.exe --selftest`** → expect `selftest: OK`.
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A && git commit -m "feat(core): wav decoding, text rules, logger, selftest harness"
@@ -85,7 +119,7 @@ git add -A && git commit -m "feat(core): wav decoding, text rules, logger, selft
 **Files:**
 - Create: `src/engine/transcribe_api.h`, `src/engine/transcribe_api.cpp`
 
-- [ ] **Step 1: `transcribe_api.h`** — mirror the header's structs with `static_assert` on sizes
+- [x] **Step 1: `transcribe_api.h`** — mirror the header's structs with `static_assert` on sizes
   (24 / 24), declare the `Status` enum values, the `Engine` class:
   `bool load(const std::string& dll_path, std::string& err);`
   `bool open_session(const std::string& model_path, int backend, std::string& err);`
@@ -94,15 +128,15 @@ git add -A && git commit -m "feat(core): wav decoding, text rules, logger, selft
   `void close_session();`
   `std::string version() const;`
   `size_t abi_struct_size(int which) const;`
-- [ ] **Step 2: `transcribe_api.cpp`** — `LoadLibraryA` + `GetProcAddress` for exactly the functions
+- [x] **Step 2: `transcribe_api.cpp`** — `LoadLibraryA` + `GetProcAddress` for exactly the functions
   used; **fail loudly if `transcribe_version() != "0.4.0"`**; **fail loudly if
   `transcribe_abi_struct_size(0) != sizeof(ModelLoadParams)` or `(1) != sizeof(SessionParams)`**.
   `open_session` fills `model_load_params` with `backend` and `device = nullptr`, calls
   `transcribe_open`.
-- [ ] **Step 3: Extend `--selftest`** to also load `engine/transcribe.dll` and assert
+- [x] **Step 3: Extend `--selftest`** to also load `engine/transcribe.dll` and assert
   version == "0.4.0" and both struct sizes match → expect `selftest: OK (engine 0.4.0)`.
-- [ ] **Step 4: Build and run** → expect `selftest: OK (engine 0.4.0)`.
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Build and run** → expect `selftest: OK (engine 0.4.0)`.
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "feat(engine): transcribe.dll C ABI binding with version/struct validation"
@@ -113,16 +147,16 @@ git add -A && git commit -m "feat(engine): transcribe.dll C ABI binding with ver
 **Files:**
 - Modify: `src/worker/main.cpp`
 
-- [ ] **Step 1: Add CLI** — `--model <gguf> --file <wav> [--backend cpu|vulkan] [--no-filler] [--json] [--print-raw]`.
+- [x] **Step 1: Add CLI** — `--model <gguf> --file <wav> [--backend cpu|vulkan] [--no-filler] [--json] [--print-raw]`.
   Defaults: backend `cpu`, filler removal **on** with the locked list
   (`uh uhm umm uhh uhhh ehh ehm ahm hmm hm mmm um ah eh`).
-- [ ] **Step 2: Implement the flow** — load WAV → `open_session` → `run` → `full_text` →
+- [x] **Step 2: Implement the flow** — load WAV → `open_session` → `run` → `full_text` →
   filler removal → whitespace tidy → trailing space → print (plain or JSON with
   `raw`, `text`, `load_ms`, `run_ms`, `audio_seconds`).
-- [ ] **Step 3: Run it on a golden WAV** —
+- [x] **Step 3: Run it on a golden WAV** —
   `build/ParakeetTypeWorker.exe --model "<gguf>" --file "C:/Users/SADI/AppData/Roaming/com.pais.handy/recordings/handy-1794595283.wav"`
   → expect `Also if possible make the controller smaller` (Handy's own transcript).
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A && git commit -m "feat(worker): transcribe a WAV file offline from the CLI"
@@ -133,12 +167,12 @@ git add -A && git commit -m "feat(worker): transcribe a WAV file offline from th
 **Files:**
 - Create: `tools/corpus_check.py`
 
-- [ ] **Step 1: Write `tools/corpus_check.py`** — read `%APPDATA%/com.pais.handy/history.db`
+- [x] **Step 1: Write `tools/corpus_check.py`** — read `%APPDATA%/com.pais.handy/history.db`
   (`transcription_history.file_name`, `.transcription_text`), run the worker on each matching WAV in
   `recordings/`, compute word error rate (Levenshtein over words) and print a per-file table
   (expected vs actual, WER %) plus a corpus WER; exit non-zero if corpus WER > 5 %.
-- [ ] **Step 2: Run it** → expect every file transcribed and corpus WER ≤ 5 %.
-- [ ] **Step 3: Commit**
+- [x] **Step 2: Run it** → expect every file transcribed and corpus WER ≤ 5 %.
+- [x] **Step 3: Commit**
 
 ```bash
 git add -A && git commit -m "test: golden-corpus regression against Handy's history.db"
@@ -149,18 +183,18 @@ git add -A && git commit -m "test: golden-corpus regression against Handy's hist
 **Files:**
 - Modify: `src/worker/main.cpp`, `src/core/wav.cpp`, `src/core/text.cpp` as needed
 
-- [ ] **Step 1: Edge cases** — empty WAV, 1-sample WAV, 8 kHz WAV (resample), stereo WAV, 32-bit
+- [x] **Step 1: Edge cases** — empty WAV, 1-sample WAV, 8 kHz WAV (resample), stereo WAV, 32-bit
   float WAV, non-WAV file, missing file, missing model file, wrong `--model` path, zero-length
   audio, a WAV longer than the model's window (60 s) → each must produce a clear error and a
   non-zero exit code, never a crash.
-- [ ] **Step 2: Guard the engine** — null `session`, null `full_text` pointer, `TRANSCRIBE_ERR_*`
+- [x] **Step 2: Guard the engine** — null `session`, null `full_text` pointer, `TRANSCRIBE_ERR_*`
   mapped to readable messages via `transcribe_status_string`.
-- [ ] **Step 3: Memory** — run the worker on a 60 s file and check RSS stays bounded (no leak of the
+- [x] **Step 3: Memory** — run the worker on a 60 s file and check RSS stays bounded (no leak of the
   session); run it twice in one process to make sure `close_session` frees the model.
-- [ ] **Step 4: Offline proof** — `python -c "import pefile; ..."` on `build/ParakeetTypeWorker.exe`:
+- [x] **Step 4: Offline proof** — `python -c "import pefile; ..."` on `build/ParakeetTypeWorker.exe`:
   assert the import list contains no `ws2_32.dll`, `winhttp.dll`, `wininet.dll`, `urlmon.dll`.
-- [ ] **Step 5: Re-run the corpus check** → still ≤ 5 % WER.
-- [ ] **Step 6: Commit**
+- [x] **Step 5: Re-run the corpus check** → still ≤ 5 % WER.
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A && git commit -m "fix: edge-case handling, engine guards, offline import audit"
@@ -168,11 +202,11 @@ git add -A && git commit -m "fix: edge-case handling, engine guards, offline imp
 
 ### Task 7: Hand-off for user testing
 
-- [ ] **Step 1: Write `README.md`** — what it is, how to run the worker on a WAV, where the model
+- [x] **Step 1: Write `README.md`** — what it is, how to run the worker on a WAV, where the model
   and engine live, and what Milestone 2/3 will add.
-- [ ] **Step 2: Record measurements** in the README: model load time, run time for a 10 s clip,
+- [x] **Step 2: Record measurements** in the README: model load time, run time for a 10 s clip,
   peak RSS.
-- [ ] **Step 3: Commit** and hand the user the exact command to try.
+- [x] **Step 3: Commit** and hand the user the exact command to try.
 
 ```bash
 git add -A && git commit -m "docs: README with usage and measurements"

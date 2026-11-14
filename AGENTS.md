@@ -57,9 +57,32 @@ headers.
   `transcribe_abi_struct_size(TRANSCRIBE_ABI_MODEL_LOAD_PARAMS)` / `...(SESSION_PARAMS)` must equal
   `sizeof()` of our mirrored structs (24 and 24). Fail loudly and early — never continue against
   a mismatched ABI.
+- **The shipped DLL is not byte-identical to the published crates.io release.** It reports 32 bytes
+  for `transcribe_stream_text` where the published header describes 64, and 16 bytes for
+  `transcribe_backend_init_params` where the header describes 24. Trust the DLL's own
+  `transcribe_abi_struct_size()` over the published header, and keep the `struct_size` prefix
+  protocol so a shorter library struct can only ever write a prefix of ours.
+- **Backends must be initialised explicitly.** The engine does *not* register compute backends on
+  its own: call `transcribe_init_backends_default()` once, before the first model load. Without it
+  the model load fails with "failed to initialize CPU backend".
+- **Backend mask.** `TRANSCRIBE_BACKENDS=cpu` (or `cpu,vulkan`, ...) narrows which backends the
+  engine may register — it keeps the GPU driver out of the process, which is worth doing because
+  registering a GPU backend runs driver code and a broken driver can take the process down before
+  any model loads. The engine reads it through its own CRT instance, so it must be set **before the
+  process starts**: the controller sets it in the worker's environment when spawning the worker.
+  Setting it from inside the process is too late (the CRT caches the environment at DLL load).
+- **ggml finds its backends by scanning a directory** for `ggml-<name>-*.dll`. The directories it
+  scans are the executable's folder and the current directory. `transcribe_init_backends_default()`
+  handles this package-locally (it uses the folder of `transcribe.dll`), so the engine payload can
+  live in its own `engine/` folder.
 - The model is loaded with `mmap`; its ~731 MB of weights are file-backed. RSS shows them, but the
   pages are shared and reclaimable.
 - PCM contract: **mono float32 @ 16 000 Hz**. The library does not resample — we do.
+- **Decode path matters.** For this model the *live streaming* decode and the one-shot batch decode
+  produce different text (the batch decode truncates and drops punctuation). Handy uses streaming,
+  so we do too: `transcribe_stream_begin` → `transcribe_stream_feed` in **480-sample (30 ms)
+  frames** → `transcribe_stream_finalize` → `transcribe_stream_get_text`. The one-shot batch run
+  stays as the fallback for when a stream yields nothing.
 
 ## 4. Build, test, run
 
@@ -81,11 +104,18 @@ build/ParakeetTypeWorker.exe \
 
 # golden-corpus regression against Handy's own transcripts
 python tools/corpus_check.py
+
+# edge cases: malformed input must fail cleanly, never crash
+python tools/edge_cases.py
+
+# offline proof + memory probe
+python tools/audit.py --model <gguf> --file <wav>
 ```
 
 `tools/corpus_check.py` compares our output with the transcripts Handy stored in
 `%APPDATA%/com.pais.handy/history.db` for the same recordings. It must stay at **≤ 5 % corpus
-word error rate**; a regression above that is a bug, not a rounding difference.
+word error rate**; a regression above that is a bug, not a rounding difference. It currently reads
+**0.00 %** — every recording matches Handy's transcript word for word.
 
 ## 5. Code conventions
 

@@ -87,11 +87,19 @@ void resample_to_engine_rate(const std::vector<double>& src, int src_rate,
 bool decode_wav(const uint8_t* data, size_t size, Audio& out, std::string& err) {
   out = Audio();
 
-  if (data == nullptr || size < 44) {
+  if (data == nullptr || size < 4) {
     err = "file is too small to be a WAV";
     return false;
   }
-  if (std::memcmp(data, "RIFF", 4) != 0 || std::memcmp(data + 8, "WAVE", 4) != 0) {
+  if (std::memcmp(data, "RIFF", 4) != 0) {
+    err = "not a RIFF/WAVE file";
+    return false;
+  }
+  if (size < 44) {
+    err = "file is too small to be a WAV";
+    return false;
+  }
+  if (std::memcmp(data + 8, "WAVE", 4) != 0) {
     err = "not a RIFF/WAVE file";
     return false;
   }

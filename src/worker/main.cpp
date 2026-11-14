@@ -91,10 +91,13 @@ int fail(const std::string& message) {
   return 1;
 }
 
-// Prints everything the engine and ggml have to say. Installed before any
-// model is loaded, as the library requires.
+// Prints the engine's and ggml's diagnostics. By default only warnings and
+// errors reach the console; --verbose shows everything.
 void engine_log_sink(int level, const char* message, void* userdata) {
-  (void)userdata;
+  const bool verbose = userdata != nullptr;
+  // Without --verbose only warnings (2) and errors (3) reach the console.
+  if (!verbose && level != 2 && level != 3) return;
+
   const char* name = "?";
   switch (level) {
     case 1: name = "INFO"; break;
@@ -192,7 +195,7 @@ int selftest(const std::string& engine_dll) {
   {
     pt::transcribe::Engine engine;
     std::string err;
-    const bool loaded = engine.load(engine_dll, err);
+    const bool loaded = engine.load(engine_dll, pt::transcribe::kBackendCpu, err);
     check(loaded, "engine DLL loads");
     if (!loaded) {
       std::fprintf(stderr, "       %s\n", err.c_str());
@@ -227,6 +230,7 @@ int main(int argc, char** argv) {
   bool run_selftest = false;
   bool verbose = false;
   bool batch = false;
+  int repeat = 1;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -254,6 +258,14 @@ int main(int argc, char** argv) {
       verbose = true;
     } else if (arg == "--batch") {
       batch = true;
+    } else if (arg == "--repeat") {
+      std::string value;
+      if (!next(value)) {
+        std::fprintf(stderr, "missing value for --repeat\n");
+        return 2;
+      }
+      repeat = std::atoi(value.c_str());
+      if (repeat < 1) repeat = 1;
     } else if (arg == "--help" || arg == "-h") {
       usage();
       return 0;
@@ -288,15 +300,21 @@ int main(int argc, char** argv) {
   std::string err;
   if (!pt::load_wav(file_path, audio, err)) return fail(err);
   if (audio.samples.empty()) return fail("no audio samples in " + file_path);
+  // The encoder needs a few hundred milliseconds to produce a frame; below
+  // that the engine can only fail, so say so plainly.
+  if (audio.samples.size() < static_cast<size_t>(pt::kEngineSampleRate / 4)) {
+    return fail("audio is too short to transcribe (needs at least 0.25 s)");
+  }
 
   pt::transcribe::Engine engine;
   const Clock::time_point t_load = Clock::now();
-  if (!engine.load(engine_dll, err)) return fail(err);
+  if (!engine.load(engine_dll, backend, err)) return fail(err);
   const std::string engine_version = engine.version();
-  if (verbose) {
+  {
     // The library wants its sink installed once, before any model is loaded.
     std::string log_err;
-    if (!engine.set_log_sink(&engine_log_sink, nullptr, log_err)) {
+    if (!engine.set_log_sink(&engine_log_sink, verbose ? reinterpret_cast<void*>(1) : nullptr,
+                             log_err)) {
       std::fprintf(stderr, "warning: %s\n", log_err.c_str());
     }
   }
@@ -307,50 +325,62 @@ int main(int argc, char** argv) {
   const Clock::time_point t_run = Clock::now();
   std::string raw;
   std::string mode;
+  double last_run_ms = 0.0;
 
-  if (batch) {
-    if (!engine.run(audio.samples.data(), static_cast<int>(audio.samples.size()), err)) {
-      engine.close_session();
-      return fail(err);
-    }
-    raw = engine.full_text();
-    mode = "batch";
-  } else {
-    // Live streaming decode: the same path Handy uses for this model, fed in
-    // 30 ms frames.
-    constexpr int kFrameSamples = 480;  // 30 ms at 16 kHz
-    bool ok = engine.stream_begin(err);
-    if (ok) {
-      const std::vector<float>& samples = audio.samples;
-      for (size_t offset = 0; offset < samples.size(); offset += kFrameSamples) {
-        const size_t count = std::min<size_t>(kFrameSamples, samples.size() - offset);
-        if (!engine.stream_feed(samples.data() + offset, static_cast<int>(count), err)) {
-          ok = false;
-          break;
-        }
-      }
-    }
-    if (ok) ok = engine.stream_finalize(err);
-    if (ok) raw = engine.stream_text();
-    mode = "stream";
+  // One pass over the audio. `--repeat` runs it several times in the same
+  // session, which is how the controller will behave: the model stays loaded
+  // between takes.
+  for (int iteration = 0; iteration < repeat; ++iteration) {
+    const Clock::time_point t_iteration = Clock::now();
+    raw.clear();
+    mode.clear();
 
-    if (!ok || raw.empty()) {
-      // A stream can miss what a run over the whole recording finds, so fall
-      // back to a single batch run over the same audio (Handy does the same).
-      if (!ok) {
-        std::fprintf(stderr, "note: streaming failed (%s); falling back to a batch run\n",
-                     err.c_str());
-      } else {
-        std::fprintf(stderr, "note: streaming produced no text; falling back to a batch run\n");
-      }
-      engine.stream_reset();
+    if (batch) {
       if (!engine.run(audio.samples.data(), static_cast<int>(audio.samples.size()), err)) {
         engine.close_session();
         return fail(err);
       }
       raw = engine.full_text();
-      mode = "batch (fallback)";
+      mode = "batch";
+    } else {
+      // Live streaming decode: the same path Handy uses for this model, fed
+      // in 30 ms frames.
+      constexpr int kFrameSamples = 480;  // 30 ms at 16 kHz
+      engine.stream_reset();
+      bool ok = engine.stream_begin(err);
+      if (ok) {
+        const std::vector<float>& samples = audio.samples;
+        for (size_t offset = 0; offset < samples.size(); offset += kFrameSamples) {
+          const size_t count = std::min<size_t>(kFrameSamples, samples.size() - offset);
+          if (!engine.stream_feed(samples.data() + offset, static_cast<int>(count), err)) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (ok) ok = engine.stream_finalize(err);
+      if (ok) raw = engine.stream_text();
+      mode = "stream";
+
+      if (!ok || raw.empty()) {
+        // A stream can miss what a run over the whole recording finds, so
+        // fall back to a single batch run (Handy does the same).
+        if (!ok) {
+          std::fprintf(stderr, "note: streaming failed (%s); falling back to a batch run\n",
+                       err.c_str());
+        } else {
+          std::fprintf(stderr, "note: streaming produced no text; falling back to a batch run\n");
+        }
+        engine.stream_reset();
+        if (!engine.run(audio.samples.data(), static_cast<int>(audio.samples.size()), err)) {
+          engine.close_session();
+          return fail(err);
+        }
+        raw = engine.full_text();
+        mode = "batch (fallback)";
+      }
     }
+    last_run_ms = ms_since(t_iteration);
   }
   const double run_ms = ms_since(t_run);
 
@@ -369,6 +399,8 @@ int main(int argc, char** argv) {
     std::printf("  \"text\": \"%s\",\n", typed.c_str());
     std::printf("  \"load_ms\": %.1f,\n", load_ms);
     std::printf("  \"run_ms\": %.1f,\n", run_ms);
+    std::printf("  \"last_run_ms\": %.1f,\n", last_run_ms);
+    std::printf("  \"repeat\": %d,\n", repeat);
     std::printf("  \"audio_seconds\": %.2f,\n", audio.seconds());
     std::printf("  \"backend\": \"%s\",\n", backend_name.c_str());
     std::printf("  \"mode\": \"%s\",\n", mode.c_str());
