@@ -1,6 +1,6 @@
-engine/
-logs/
-build/
+/engine/
+/build/
+/logs/
 *.exe
 *.o
 *.obj
