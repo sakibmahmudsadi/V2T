@@ -18,6 +18,9 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -st
 # No OS headers are allowed in src/core; src/engine uses the Win32 loader.
 # ---------------------------------------------------------------------------
 add_library(ptcore STATIC
+  src/core/config.cpp
+  src/core/ipc.cpp
+  src/core/json.cpp
   src/core/log.cpp
   src/core/text.cpp
   src/core/wav.cpp
@@ -30,14 +33,36 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
+# ptwin32 — the Windows backends (hotkey, capture, typing, mic button).
+# ---------------------------------------------------------------------------
+add_library(ptwin32 STATIC
+  src/platform/win32/audio.cpp
+  src/platform/win32/hotkey.cpp
+  src/platform/win32/mic_button.cpp
+  src/platform/win32/paths.cpp
+  src/platform/win32/typing.cpp
+  src/platform/win32/worker_client.cpp
+)
+target_include_directories(ptwin32 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+if(WIN32)
+  target_link_libraries(ptwin32 PUBLIC user32 gdi32 shell32 winmm dwmapi)
+endif()
+
+# ---------------------------------------------------------------------------
 # ParakeetTypeWorker — the model host.
 # ---------------------------------------------------------------------------
 add_executable(ParakeetTypeWorker
   src/worker/main.cpp
-  src/platform/win32/paths.cpp
 )
 target_include_directories(ParakeetTypeWorker PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ParakeetTypeWorker PRIVATE ptcore)
-if(WIN32)
-  target_link_libraries(ParakeetTypeWorker PRIVATE user32)
-endif()
+# ptwin32 depends on ptcore, so it comes first for the static linker.
+target_link_libraries(ParakeetTypeWorker PRIVATE ptwin32 ptcore)
+
+# ---------------------------------------------------------------------------
+# ParakeetType — the always-on controller.
+# ---------------------------------------------------------------------------
+add_executable(ParakeetType
+  src/controller/main.cpp
+)
+target_include_directories(ParakeetType PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(ParakeetType PRIVATE ptwin32 ptcore)

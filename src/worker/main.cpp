@@ -1,15 +1,13 @@
 // ParakeetType worker — the model host.
 //
-// Milestone 1 shape: a command line tool that loads the local Parakeet model
-// through transcribe.dll and transcribes a WAV file, fully offline.
+// Two modes:
+//   CLI     ParakeetTypeWorker --model <gguf> --file <wav> [--backend cpu|vulkan|auto]
+//                              [--no-filler] [--json]
+//   Server  ParakeetTypeWorker --serve --pipe <name>   (the controller's worker)
 //
-//   ParakeetTypeWorker --model <gguf> --file <wav> [--backend cpu|vulkan|auto]
-//                        [--no-filler] [--json]
-//   ParakeetTypeWorker --selftest
-//
-// Later milestones turn this into the long-lived worker process that the
-// controller talks to over a pipe; the engine binding and the text rules are
-// already the final ones.
+// In server mode the worker owns the model and decodes the audio the
+// controller feeds it, live, over a named pipe. The engine binding and the
+// text rules are the same in both modes.
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -17,13 +15,22 @@
 #include <string>
 #include <vector>
 
+#include "core/ipc.h"
+#include "core/json.h"
 #include "core/log.h"
 #include "core/text.h"
 #include "core/wav.h"
 #include "engine/transcribe_api.h"
 #include "platform/win32/paths.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace {
+
+namespace json = pt::json;
+namespace ipc = pt::ipc;
 
 using Clock = std::chrono::steady_clock;
 
@@ -38,6 +45,8 @@ void usage() {
                "  --file <wav>        16-bit or 32-bit float WAV file\n"
                "  --backend <name>    cpu | vulkan | auto (default cpu)\n"
                "  --engine <dll>      engine DLL (default <exe dir>/engine/transcribe.dll)\n"
+               "  --serve             run as the controller's worker\n"
+               "  --pipe <name>       named pipe to serve on (with --serve)\n"
                "  --no-filler         do not strip filler words\n"
                "  --json              machine-readable output\n"
                "  --selftest          run the built-in checks and exit\n");
@@ -220,6 +229,218 @@ int selftest(const std::string& engine_dll) {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// Server mode: the controller's worker.
+// ---------------------------------------------------------------------------
+
+#if defined(_WIN32)
+
+std::wstring widen(const std::string& value) {
+  if (value.empty()) return std::wstring();
+  const int needed = MultiByteToWideChar(CP_UTF8, 0, value.c_str(),
+                                          static_cast<int>(value.size()), nullptr, 0);
+  std::wstring result(static_cast<size_t>(needed), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), &result[0],
+                      needed);
+  return result;
+}
+
+// Connects to the pipe the controller created. The controller may still be
+// starting up, so retry for a few seconds.
+HANDLE connect_to_pipe(const std::string& pipe_name, std::string& err) {
+  const std::wstring path = L"\\\\.\\pipe\\" + widen(pipe_name);
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    HANDLE pipe = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                               OPEN_EXISTING, 0, nullptr);
+    if (pipe != INVALID_HANDLE_VALUE) return pipe;
+    Sleep(50);
+  }
+  err = "cannot connect to the controller pipe '" + pipe_name + "'";
+  return INVALID_HANDLE_VALUE;
+}
+
+bool send_json(HANDLE pipe, const json::ValuePtr& value) {
+  const std::string text = json::stringify(*value);
+  return ipc::write_frame(pipe, ipc::kFrameControl, text.data(), text.size());
+}
+
+json::ValuePtr reply_ok() {
+  json::ValuePtr value = json::make_object();
+  json::set(value, "ok", json::make_bool(true));
+  return value;
+}
+
+json::ValuePtr reply_error(const std::string& message) {
+  json::ValuePtr value = json::make_object();
+  json::set(value, "ok", json::make_bool(false));
+  json::set(value, "error", json::make_string(message));
+  return value;
+}
+
+int run_server(const std::string& pipe_name, const std::string& model_path,
+               const std::string& backend_name, const std::string& engine_dll) {
+  std::string err;
+  HANDLE pipe = connect_to_pipe(pipe_name, err);
+  if (pipe == INVALID_HANDLE_VALUE) {
+    std::fprintf(stderr, "error: %s\n", err.c_str());
+    return 1;
+  }
+
+  int backend = pt::transcribe::kBackendCpu;
+  if (!backend_name.empty() && !pt::transcribe::backend_from_name(backend_name, backend)) {
+    std::fprintf(stderr, "error: unknown backend '%s'\n", backend_name.c_str());
+    CloseHandle(pipe);
+    return 1;
+  }
+
+  pt::transcribe::Engine engine;
+  if (!engine.load(engine_dll, backend, err)) {
+    send_json(pipe, reply_error(err));
+    std::fprintf(stderr, "error: %s\n", err.c_str());
+    CloseHandle(pipe);
+    return 1;
+  }
+  if (!engine.init_backends(backend, err)) {
+    send_json(pipe, reply_error(err));
+    CloseHandle(pipe);
+    return 1;
+  }
+
+  bool model_loaded = false;
+  bool streaming = false;
+  std::vector<uint8_t> last_audio;
+
+  while (true) {
+    uint32_t kind = 0;
+    std::vector<uint8_t> payload;
+    if (!ipc::read_frame(pipe, kind, payload)) break;
+
+    if (kind == ipc::kFrameAudio) {
+      // The last audio frame is kept so a "batch" command can decode it as a
+      // one-shot run (the fallback when a stream yields nothing).
+      last_audio = payload;
+      if (!streaming || payload.empty()) continue;
+      const size_t count = payload.size() / sizeof(float);
+      std::string feed_error;
+      if (!engine.stream_feed(reinterpret_cast<const float*>(payload.data()),
+                              static_cast<int>(count), feed_error)) {
+        // No reply here: the controller is not reading at this point, and a
+        // blocking write would deadlock the pipe.
+        std::fprintf(stderr, "worker: feed failed: %s\n", feed_error.c_str());
+      }
+      continue;
+    }
+
+    if (kind != ipc::kFrameControl) continue;
+
+    std::string parse_error;
+    const json::ValuePtr message = json::parse(
+        std::string(payload.begin(), payload.end()), parse_error);
+    if (message == nullptr || !message->is_object()) {
+      send_json(pipe, reply_error("malformed control message"));
+      continue;
+    }
+
+    const json::Value* command = message->find("cmd");
+    const std::string name = command != nullptr ? command->as_string() : std::string();
+
+    if (name == "load") {
+      const json::Value* model = message->find("model");
+      const std::string path = model != nullptr ? model->as_string() : model_path;
+      const Clock::time_point start = Clock::now();
+      std::string open_error;
+      if (!engine.open_session(path, backend, open_error)) {
+        send_json(pipe, reply_error(open_error));
+        continue;
+      }
+      model_loaded = true;
+      json::ValuePtr reply = reply_ok();
+      json::set(reply, "load_ms", json::make_number(ms_since(start)));
+      send_json(pipe, reply);
+      continue;
+    }
+
+    if (name == "begin") {
+      if (!model_loaded) {
+        send_json(pipe, reply_error("no model is loaded"));
+        continue;
+      }
+      std::string begin_error;
+      if (!engine.stream_begin(begin_error)) {
+        send_json(pipe, reply_error(begin_error));
+        continue;
+      }
+      streaming = true;
+      send_json(pipe, reply_ok());
+      continue;
+    }
+
+    if (name == "finalize") {
+      if (!streaming) {
+        send_json(pipe, reply_error("no stream is active"));
+        continue;
+      }
+      std::string finalize_error;
+      std::string text;
+      if (engine.stream_finalize(finalize_error)) {
+        text = engine.stream_text();
+      }
+      streaming = false;
+      if (text.empty()) {
+        // A stream can miss what a run over the whole recording finds; the
+        // controller sends the buffer for a batch retry in that case.
+        send_json(pipe, reply_error(text.empty() ? "no text" : finalize_error));
+        continue;
+      }
+      json::ValuePtr reply = reply_ok();
+      json::set(reply, "text", json::make_string(text));
+      send_json(pipe, reply);
+      continue;
+    }
+
+    if (name == "batch") {
+      // Fallback path: the controller sends the whole buffer as one audio
+      // frame and then asks for a one-shot decode of it.
+      if (!model_loaded || last_audio.empty()) {
+        send_json(pipe, reply_error("no audio to decode"));
+        continue;
+      }
+      const size_t count = last_audio.size() / sizeof(float);
+      std::string run_error;
+      if (!engine.run(reinterpret_cast<const float*>(last_audio.data()),
+                      static_cast<int>(count), run_error)) {
+        send_json(pipe, reply_error(run_error));
+        continue;
+      }
+      json::ValuePtr reply = reply_ok();
+      json::set(reply, "text", json::make_string(engine.full_text()));
+      send_json(pipe, reply);
+      continue;
+    }
+
+    if (name == "reset") {
+      // The take was cancelled: drop the stream and start clean.
+      engine.stream_reset();
+      streaming = false;
+      send_json(pipe, reply_ok());
+      continue;
+    }
+
+    if (name == "shutdown") {
+      send_json(pipe, reply_ok());
+      break;
+    }
+
+    send_json(pipe, reply_error("unknown command '" + name + "'"));
+  }
+
+  engine.close_session();
+  CloseHandle(pipe);
+  return 0;
+}
+
+#endif  // _WIN32
+
 int main(int argc, char** argv) {
   std::string model_path;
   std::string file_path;
@@ -231,6 +452,8 @@ int main(int argc, char** argv) {
   bool verbose = false;
   bool batch = false;
   int repeat = 1;
+  bool serve = false;
+  std::string pipe_name;
 
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -258,6 +481,10 @@ int main(int argc, char** argv) {
       verbose = true;
     } else if (arg == "--batch") {
       batch = true;
+    } else if (arg == "--serve") {
+      serve = true;
+    } else if (arg == "--pipe") {
+      ok = next(pipe_name);
     } else if (arg == "--repeat") {
       std::string value;
       if (!next(value)) {
@@ -285,6 +512,21 @@ int main(int argc, char** argv) {
   }
 
   if (run_selftest) return selftest(engine_dll);
+
+#if defined(_WIN32)
+  if (serve) {
+    if (pipe_name.empty()) {
+      std::fprintf(stderr, "error: --serve needs --pipe <name>\n");
+      return 2;
+    }
+    return run_server(pipe_name, model_path, backend_name, engine_dll);
+  }
+#else
+  if (serve) {
+    std::fprintf(stderr, "error: --serve is only implemented for Windows\n");
+    return 2;
+  }
+#endif
 
   if (model_path.empty() || file_path.empty()) {
     usage();

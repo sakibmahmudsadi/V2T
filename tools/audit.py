@@ -74,6 +74,7 @@ def peak_working_set(pid: int) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", default=str(REPO / "build" / "ParakeetTypeWorker.exe"))
+    parser.add_argument("--controller", default=str(REPO / "build" / "ParakeetType.exe"))
     parser.add_argument("--model", default="")
     parser.add_argument("--file", default="")
     args = parser.parse_args()
@@ -82,12 +83,15 @@ def main() -> int:
     failures = 0
 
     print("=== offline audit ===")
-    offenders = audit_imports(worker)
-    if offenders:
-        print(f"FAILED: networking DLLs present: {', '.join(offenders)}")
-        failures += 1
-    else:
-        print("PASS: no networking DLL in the import table")
+    for binary in (worker, Path(args.controller)):
+        if not binary.exists():
+            continue
+        offenders = audit_imports(binary)
+        if offenders:
+            print(f"FAILED: {binary.name} links networking DLLs: {', '.join(offenders)}")
+            failures += 1
+        else:
+            print(f"PASS: {binary.name} has no networking DLL in its import table")
 
     if args.model and args.file:
         print()
