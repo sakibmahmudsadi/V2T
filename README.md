@@ -51,7 +51,8 @@ bash tools/build_release.sh        # -> dist/V2T/
 dist/V2T/V2T.exe
 ```
 
-`config.json` (next to the executable) holds the model path and the settings:
+`config.json` (next to the executable) holds the model path and the settings.
+`config.example.json` is the same file with placeholder paths, for other machines:
 
 | Key | Meaning | Default |
 |---|---|---|
@@ -117,6 +118,8 @@ bash tools/run_tests.sh
 | `tools/controller_test.py` | the hotkey shows and hides the mic button |
 | `tools/idle_unload_test.py` | the worker exits when the model goes idle |
 | `tools/audit.py` | neither binary links a networking DLL |
+| `tools/icon_test.py` | the mic button renders a real glyph |
+| `tools/frame_sweep.py` | measures how the stream frame size affects the result |
 
 ---
 

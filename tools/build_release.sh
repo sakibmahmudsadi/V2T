@@ -17,6 +17,7 @@ cp build/V2T.exe "$DIST/"
 cp build/V2TWorker.exe "$DIST/"
 cp engine/*.dll "$DIST/engine/"
 cp config.json "$DIST/"
+cp config.example.json "$DIST/"
 cp README.md "$DIST/"
 
 echo "release -> $DIST"

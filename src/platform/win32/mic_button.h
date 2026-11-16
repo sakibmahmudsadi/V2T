@@ -42,6 +42,10 @@ class MicButton {
   void set_state(MicButtonState state, const std::string& tooltip = std::string());
   MicButtonState state() const { return state_; }
 
+  // Renders the button to a 24-bit BMP file (used to eyeball the icon
+  // without taking a screenshot).
+  bool render_to_file(const std::string& path, MicButtonState state) const;
+
  private:
   static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param);
   void paint();

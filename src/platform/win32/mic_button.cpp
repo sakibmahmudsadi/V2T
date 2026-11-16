@@ -3,6 +3,9 @@
 #include <shellapi.h>
 #include <windowsx.h>
 
+#include <cstdint>
+#include <vector>
+
 namespace pt {
 namespace win32 {
 namespace {
@@ -146,6 +149,65 @@ void MicButton::update_position() {
     SetWindowPos(window_, HWND_TOPMOST, rect.right - kButtonSize - kMargin, y, kButtonSize,
                  kButtonSize, SWP_NOACTIVATE | SWP_SHOWWINDOW);
   }
+}
+
+bool MicButton::render_to_file(const std::string& path, MicButtonState state) const {
+  const int size = kButtonSize;
+
+  HDC screen = GetDC(nullptr);
+  HDC dc = CreateCompatibleDC(screen);
+  HBITMAP bitmap = CreateCompatibleBitmap(screen, size, size);
+  HGDIOBJ old = SelectObject(dc, bitmap);
+
+  RECT bounds{0, 0, size, size};
+  const HBRUSH background = CreateSolidBrush(RGB(20, 20, 24));
+  FillRect(dc, &bounds, background);
+  DeleteObject(background);
+
+  COLORREF colour = RGB(210, 210, 216);
+  switch (state) {
+    case MicButtonState::Idle: colour = RGB(198, 200, 210); break;
+    case MicButtonState::Active: colour = RGB(58, 200, 110); break;
+    case MicButtonState::Working: colour = RGB(255, 176, 46); break;
+    case MicButtonState::Attention: colour = RGB(235, 90, 80); break;
+  }
+  draw_mic(dc, bounds, colour);
+
+  BITMAPINFO info;
+  ZeroMemory(&info, sizeof(info));
+  info.bmiHeader.biSize = sizeof(info.bmiHeader);
+  info.bmiHeader.biWidth = size;
+  info.bmiHeader.biHeight = -size;  // top-down
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 24;
+  info.bmiHeader.biCompression = BI_RGB;
+
+  const size_t stride = ((size * 3 + 3) / 4) * 4;
+  std::vector<uint8_t> pixels(stride * static_cast<size_t>(size), 0);
+  GetDIBits(dc, bitmap, 0, size, pixels.data(), &info, DIB_RGB_COLORS);
+
+  BITMAPFILEHEADER header;
+  ZeroMemory(&header, sizeof(header));
+  header.bfType = 0x4D42;
+  header.bfOffBits = sizeof(header) + sizeof(info.bmiHeader);
+  header.bfSize = static_cast<DWORD>(header.bfOffBits + pixels.size());
+
+  HANDLE file = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  bool ok = false;
+  if (file != INVALID_HANDLE_VALUE) {
+    DWORD written = 0;
+    ok = WriteFile(file, &header, sizeof(header), &written, nullptr) &&
+         WriteFile(file, &info.bmiHeader, sizeof(info.bmiHeader), &written, nullptr) &&
+         WriteFile(file, pixels.data(), static_cast<DWORD>(pixels.size()), &written, nullptr);
+    CloseHandle(file);
+  }
+
+  SelectObject(dc, old);
+  DeleteObject(bitmap);
+  DeleteDC(dc);
+  ReleaseDC(nullptr, screen);
+  return ok;
 }
 
 void MicButton::paint() {

@@ -513,10 +513,26 @@ int main(int argc, char** argv) {
     const std::string arg = argv[i];
     if (arg == "--config" && i + 1 < argc) {
       config_path = argv[++i];
+    } else if (arg == "--render-icon") {
+      // Writes the mic button to a BMP so the icon can be checked without a
+      // screenshot.
+      if (i + 1 >= argc) {
+        std::fprintf(stderr, "missing value for --render-icon\n");
+        return 2;
+      }
+      const std::string output = argv[++i];
+      pt::win32::MicButton button;
+      if (!button.render_to_file(output, pt::win32::MicButtonState::Active)) {
+        std::fprintf(stderr, "error: cannot write %s\n", output.c_str());
+        return 1;
+      }
+      std::fprintf(stderr, "wrote %s\n", output.c_str());
+      return 0;
     } else if (arg == "--help" || arg == "-h") {
       std::fprintf(stderr,
                    "V2T controller\n"
-                   "  --config <path>   configuration file (default: config.json next to the exe)\n");
+                   "  --config <path>    configuration file (default: config.json next to the exe)\n"
+                   "  --render-icon <bmp>  write the mic button to a bitmap and exit\n");
       return 0;
     }
   }

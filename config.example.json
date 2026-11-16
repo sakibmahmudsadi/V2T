@@ -1,0 +1,18 @@
+{
+  "model_path": "C:/Users/<you>/.cache/huggingface/hub/models--handy-computer--parakeet-unified-en-0.6b-gguf/snapshots/<hash>/parakeet-unified-en-0.6b-Q8_0.gguf",
+  "engine_dir": "engine",
+  "backend": "cpu",
+  "hotkey": [
+    "rctrl",
+    "ralt"
+  ],
+  "cancel_key": "esc",
+  "model_unload_seconds": 60,
+  "max_buffer_seconds": 120,
+  "filler_removal": true,
+  "append_trailing_space": true,
+  "auto_submit": false,
+  "mic_button_edge": "right",
+  "log_path": "logs/v2t.log",
+  "log_level": "info"
+}

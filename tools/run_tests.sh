@@ -36,6 +36,7 @@ step "controller <-> worker protocol" python tools/ipc_test.py
 step "streaming does not hang on silence" python tools/silence_test.py
 step "controller hotkey" python tools/controller_test.py
 step "the model is released when idle" python tools/idle_unload_test.py --idle-seconds 5
+step "the mic button renders" python tools/icon_test.py
 step "offline audit (no networking DLL)" python tools/audit.py --model "$MODEL" \
   --file "C:/Users/SADI/AppData/Roaming/com.pais.handy/recordings/handy-1794634700.wav"
 
