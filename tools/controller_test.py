@@ -75,6 +75,24 @@ def press_combo():
     key(VK_RCONTROL, up=True)
 
 
+def read_log(log_paths):
+    text = ""
+    for path in log_paths:
+        if path.exists():
+            text += path.read_text(encoding="utf-8", errors="replace")
+    return text
+
+
+def wait_for_log(log_paths, needle, timeout=15.0):
+    """Waits until `needle` shows up in the log (the app is idle again)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if needle in read_log(log_paths):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def find_mic_button():
     """True when the mic button window exists *and* is on screen.
 
@@ -125,7 +143,7 @@ def main() -> int:
             failures += 1
 
         # 2. pressing it again stops the recording
-        time.sleep(1.0)
+        time.sleep(1.5)
         press_combo()
         disappeared = False
         for _ in range(60):
@@ -139,16 +157,16 @@ def main() -> int:
 
         # 3. a second take reuses the worker: the model must NOT be loaded
         #    again (that is the difference between 1 s and 1.3 s of waiting,
-        #    and a gigabyte of re-allocation)
+        #    and a gigabyte of re-allocation).
+        #    The app has to be idle again before the hotkey means anything,
+        #    so wait for the first take to be finished.
+        wait_for_log(log_paths, "nothing was transcribed")
         press_combo()
         time.sleep(2.0)
         press_combo()
-        time.sleep(3.0)
+        wait_for_log(log_paths, "reusing the worker")
 
-        log = ""
-        for path in log_paths:
-            if path.exists():
-                log += path.read_text(encoding="utf-8", errors="replace")
+        log = read_log(log_paths)
         reused = "reusing the worker" in log
         loads = log.count("model ready")
         print(f"  {'ok  ' if reused else 'FAIL'} the second take reuses the loaded model")
@@ -159,11 +177,8 @@ def main() -> int:
             failures += 1
 
         # 4. the log records what happened
-        time.sleep(1.0)
-        log = ""
-        for path in log_paths:
-            if path.exists():
-                log += path.read_text(encoding="utf-8", errors="replace")
+        time.sleep(0.5)
+        log = read_log(log_paths)
         started = "recording started" in log
         print(f"  {'ok  ' if started else 'FAIL'} the log records the recording")
         if not started:
