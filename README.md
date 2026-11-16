@@ -8,6 +8,8 @@ Press **Right Ctrl + Right Alt**, speak, press again — the text appears at you
 no updater, no model downloads. The transcription runs on your own machine through the same
 inference engine Handy uses, so the words come out exactly the same.
 
+**→ Building or rebuilding it? Read [`BUILD.md`](BUILD.md).**
+
 **Status: Milestones 1–3 complete.** The dictation loop works end to end: hotkey → microphone →
 live decode → text typed at the cursor, with the model held in a separate worker that releases its
 memory 60 seconds after each take.
@@ -50,6 +52,8 @@ cd W:\Pipeline\V2T
 bash tools/build_release.sh        # -> dist/V2T/
 dist/V2T/V2T.exe
 ```
+
+Full build instructions, prerequisites and troubleshooting: **[BUILD.md](BUILD.md)**.
 
 `config.json` (next to the executable) holds the model path and the settings.
 `config.example.json` is the same file with placeholder paths, for other machines:
