@@ -153,8 +153,13 @@ DLLs inside `engine/` that `transcribe.dll` itself needs).
 dist/V2T/V2T.exe
 ```
 
-Nothing appears on screen while it is idle — that is the design. Press **Right Ctrl + Right
-Alt**:
+Nothing appears on screen while it is idle — that is the design. The **tray icon** is the one
+thing that is always there: grey while V2T waits for the hotkey, **green while it records**,
+amber while the model decodes, red on an error, with the tooltip telling you which. Right-click it
+for *Quit V2T*. Windows puts new tray icons in the overflow area — drag it onto the taskbar to
+pin it where you can always see it.
+
+Press **Right Ctrl + Right Alt**:
 
 1. a **mic button** docks to the right edge of the screen (grey when quiet, **green while
    your voice is arriving**),
@@ -245,7 +250,8 @@ src/core/            portable logic, no OS headers
   ipc.*              the framed pipe protocol
   log.*              leveled logger
 src/engine/          the transcribe.dll C ABI binding — the only file that knows the engine exists
-src/platform/win32/  hotkey · audio (waveIn) · typing (SendInput) · mic button · worker client
+src/platform/win32/  hotkey · audio (waveIn) · typing (SendInput) · mic button · tray icon
+                    · the shared microphone glyph · worker client
 src/controller/      the always-on process
 src/worker/          the model host: CLI mode and server mode
 engine/              runtime DLLs (git-ignored)
@@ -302,7 +308,8 @@ rm -rf build && bash tools/build_release.sh
 | The mic button never appears | the hotkey is taken by another program | change `hotkey` in `config.json` (e.g. `["ralt","rshift"]`) |
 | The button stays grey while you speak | the mic is muted or the wrong device | Windows → Settings → System → Sound → Input; check the level meter in the log |
 | Nothing is typed | the target window is elevated | `SendInput` cannot reach admin windows — use a normal window |
-| The app never starts | another instance is running | right-click the mic button to quit, or end `V2T.exe` in Task Manager |
+| The app never starts | another instance is running | right-click the tray icon (or the mic button) to quit, or end `V2T.exe` in Task Manager |
+| The tray icon is hidden | Windows puts new icons in the overflow area | drag it from the `^` arrow onto the taskbar to pin it |
 | The model reloads on every take | the worker is being restarted | check the log for `reusing the worker`; it should appear from the second take on |
 | `the model was idle; the worker exited` during a take | fixed — the timer must not fire while recording | rebuild and check the log |
 
