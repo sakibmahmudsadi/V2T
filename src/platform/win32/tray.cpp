@@ -261,6 +261,7 @@ bool TrayIcon::create(HWND owner, const std::string& tooltip, std::string& err) 
 }
 
 void TrayIcon::set_state(TrayState state, const std::string& tooltip) {
+  state_ = state;
   if (!created_) return;
   const int index = static_cast<int>(state);
   if (index >= 0 && index <= 3 && icons_[index] != nullptr) {

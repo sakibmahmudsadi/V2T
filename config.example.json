@@ -6,6 +6,7 @@
     "rctrl",
     "ralt"
   ],
+  "microphone": "",
   "cancel_key": "esc",
   "model_unload_seconds": 60,
   "max_buffer_seconds": 120,

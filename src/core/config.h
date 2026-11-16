@@ -23,6 +23,9 @@ struct Config {
   std::vector<std::string> hotkey = {"rctrl", "ralt"};
   std::string cancel_key = "esc";
 
+  // Substring of the capture device name ("" = the system default).
+  std::string microphone;
+
   // The worker exits this many seconds after the last transcription.
   int model_unload_seconds = 60;
 

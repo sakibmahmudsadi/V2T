@@ -26,9 +26,43 @@ AudioCapture::~AudioCapture() {
   stop();
 }
 
-bool AudioCapture::start(Sink sink, std::string& err) {
+std::vector<std::string> AudioCapture::device_names() {
+  std::vector<std::string> names;
+  const UINT count = waveInGetNumDevs();
+  for (UINT index = 0; index < count; ++index) {
+    WAVEINCAPSW caps;
+    ZeroMemory(&caps, sizeof(caps));
+    if (waveInGetDevCapsW(index, &caps, sizeof(caps)) == MMSYSERR_NOERROR) {
+      const std::wstring wide_name(caps.szPname);
+      names.push_back(std::string(wide_name.begin(), wide_name.end()));
+    }
+  }
+  return names;
+}
+
+bool AudioCapture::start(Sink sink, const std::string& device_hint, std::string& err) {
   if (running_) return true;
   sink_ = std::move(sink);
+
+  // Pick the device: the hint wins, otherwise the system default.
+  UINT device_id = WAVE_MAPPER;
+  if (!device_hint.empty()) {
+    const std::vector<std::string> names = device_names();
+    bool found = false;
+    for (size_t i = 0; i < names.size(); ++i) {
+      if (names[i].find(device_hint) != std::string::npos) {
+        device_id = static_cast<UINT>(i);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      std::string list;
+      for (const std::string& name : names) list += name + ", ";
+      err = "no microphone matching '" + device_hint + "' (available: " + list + ")";
+      return false;
+    }
+  }
   {
     std::lock_guard<std::mutex> lock(driver_mutex_);
     stopping_ = false;
@@ -46,7 +80,7 @@ bool AudioCapture::start(Sink sink, std::string& err) {
 
   HWAVEIN device = nullptr;
   const MMRESULT opened = waveInOpen(
-      &device, WAVE_MAPPER, &format, reinterpret_cast<DWORD_PTR>(&AudioCapture::callback),
+      &device, device_id, &format, reinterpret_cast<DWORD_PTR>(&AudioCapture::callback),
       reinterpret_cast<DWORD_PTR>(this), CALLBACK_FUNCTION);
   if (opened != MMSYSERR_NOERROR || device == nullptr) {
     err = "cannot open the microphone (no input device, or it is in use exclusively)";

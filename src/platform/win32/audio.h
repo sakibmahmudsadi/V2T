@@ -14,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <vector>
 
 namespace pt {
 namespace win32 {
@@ -25,7 +26,11 @@ class AudioCapture {
 
   ~AudioCapture();
 
-  bool start(Sink sink, std::string& err);
+  // `device_hint` is a substring of the device name ("" = the system default).
+  bool start(Sink sink, const std::string& device_hint, std::string& err);
+
+  // The names of the capture devices waveIn can see.
+  static std::vector<std::string> device_names();
   void stop();
   bool is_running() const { return running_; }
 

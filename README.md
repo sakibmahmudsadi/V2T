@@ -38,6 +38,9 @@ V2TWorker.exe    the model host — 1.05 GB while it holds the model
   while the microphone is quiet and green while your voice is arriving** — one colour tells you
   whether the app is hearing you. Click it (or press the hotkey again) to stop; `Esc` cancels.
   Nothing is visible while the app is idle.
+- If the microphone ever goes silent (muted, unplugged, wrong device), V2T **says so** — in the
+  log, in the tray tooltip, and with a red tray icon — instead of quietly transcribing nothing.
+  `tools/mic_state.py` shows the input device's mute state, `tools/mic_probe.py` shows the level.
 - **The model is loaded once and reused.** The worker keeps it between takes and exits 60 seconds
   after the last one, so the second take starts instantly instead of paying a fresh model load.
 - The finished text is typed at the cursor. Filler words (`uh uhm umm uhh uhhh ehh ehm ahm hmm hm
@@ -65,6 +68,7 @@ Full build instructions, prerequisites and troubleshooting: **[BUILD.md](BUILD.m
 | `engine_dir` | folder with `transcribe.dll` | `engine/` next to the exe |
 | `backend` | `cpu` or `vulkan` | `cpu` |
 | `hotkey` | keys that toggle dictation | `["rctrl", "ralt"]` |
+| `microphone` | substring of the capture device name (`""` = the system default) | `""` |
 | `cancel_key` | key that cancels the take | `esc` |
 | `model_unload_seconds` | when the worker releases the model | `60` |
 | `max_buffer_seconds` | cap on the captured audio | `120` |

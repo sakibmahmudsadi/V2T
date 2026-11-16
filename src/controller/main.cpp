@@ -103,6 +103,11 @@ bool g_worker_active = false;  // the worker process holds the model
 // The input level, 0..1, used to tell "recording" from "audio is arriving".
 std::atomic<float> g_input_level{0.0f};
 
+// When did we last hear anything? Used to catch a microphone that is
+// muted, unplugged, or pointed at a device that is not connected.
+std::atomic<double> g_last_voice_time{0.0};
+bool g_silence_reported = false;
+
 void on_audio(const float* samples, size_t count) {
   // Root mean square of the chunk: cheap, and enough to show that the
   // microphone is picking you up.
@@ -112,6 +117,9 @@ void on_audio(const float* samples, size_t count) {
   }
   const float rms = count > 0 ? static_cast<float>(std::sqrt(sum / count)) : 0.0f;
   g_input_level = rms;
+  if (rms > 0.002f) {
+    g_last_voice_time = static_cast<double>(GetTickCount64());
+  }
 
   std::lock_guard<std::mutex> lock(g_shared.mutex);
   const size_t cap = static_cast<size_t>(g_config.max_buffer_seconds) * 16000;
@@ -382,7 +390,7 @@ void start_dictation() {
   g_shared.cv.notify_all();
 
   std::string error;
-  if (!g_audio.start(&on_audio, error)) {
+  if (!g_audio.start(&on_audio, g_config.microphone, error)) {
     PT_ERROR("cannot start the microphone: " + error);
     g_shared.state = AppState::Idle;
     set_tray(pt::win32::TrayState::Error, "V2T — no microphone");
@@ -395,6 +403,8 @@ void start_dictation() {
     std::lock_guard<std::mutex> lock(g_shared.mutex);
     g_shared.last_activity = std::chrono::steady_clock::now();
   }
+  g_last_voice_time = static_cast<double>(GetTickCount64());
+  g_silence_reported = false;
   g_shared.state = AppState::Recording;
   set_tray(pt::win32::TrayState::Recording, "V2T — recording");
   std::string show_error;
@@ -519,6 +529,25 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
         g_mic.set_state(loud ? pt::win32::MicButtonState::Active
                              : pt::win32::MicButtonState::Idle,
                         loud ? "listening" : "recording");
+
+        // A microphone that never delivers anything is the one failure that
+        // is invisible otherwise: say so instead of transcribing silence.
+        const double now = static_cast<double>(GetTickCount64());
+        const double since_voice = now - g_last_voice_time.load();
+        if (since_voice > 4000.0) {
+          if (!g_silence_reported) {
+            g_silence_reported = true;
+            PT_ERROR("no sound from the microphone — check the input device "
+                     "(Windows Settings > System > Sound > Input) and that it is not muted");
+          }
+          set_tray(pt::win32::TrayState::Error,
+                   "V2T — no sound from the microphone");
+          g_mic.set_state(pt::win32::MicButtonState::Attention,
+                          "no sound from the microphone");
+        } else if (loud && g_tray.state_is_error()) {
+          g_silence_reported = false;
+          set_tray(pt::win32::TrayState::Recording, "V2T — recording");
+        }
       }
       return 0;
 
@@ -637,6 +666,29 @@ int main(int argc, char** argv) {
   if (!g_hotkey.start(g_config.hotkey, g_config.cancel_key, hotkey_error)) {
     std::fprintf(stderr, "error: %s\n", hotkey_error.c_str());
     return 1;
+  }
+
+  // Tell the user up front which microphone will be used, and complain now
+  // if the configured one does not exist.
+  {
+    const std::vector<std::string> devices = pt::win32::AudioCapture::device_names();
+    std::string list;
+    for (const std::string& name : devices) list += name + ", ";
+    if (devices.empty()) {
+      PT_ERROR("no capture device found — check Windows Settings > System > Sound > Input");
+    } else {
+      PT_INFO("capture devices: " + list);
+      if (!g_config.microphone.empty()) {
+        bool found = false;
+        for (const std::string& name : devices) {
+          if (name.find(g_config.microphone) != std::string::npos) found = true;
+        }
+        if (!found) {
+          PT_ERROR("no microphone matching '" + g_config.microphone +
+                   "' (available: " + list + ")");
+        }
+      }
+    }
   }
 
   // The tray icon: the app's permanent, glanceable presence.

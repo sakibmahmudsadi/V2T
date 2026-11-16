@@ -177,6 +177,7 @@ Right-click the mic button quits the app.
 | `engine_dir` | folder holding `transcribe.dll` | `engine/` next to the exe |
 | `backend` | `cpu` or `vulkan` | `cpu` |
 | `hotkey` | keys that toggle dictation | `["rctrl", "ralt"]` |
+| `microphone` | substring of the capture device name (`""` = the system default) | `""` |
 | `cancel_key` | key that cancels the take | `esc` |
 | `model_unload_seconds` | when the worker releases the model | `60` |
 | `max_buffer_seconds` | cap on the captured audio | `120` |
@@ -231,7 +232,23 @@ Useful extras:
 ```bash
 python tools/frame_sweep.py     # how the stream frame size affects the accuracy
 python tools/corpus_check.py    # per-recording word error rate
+python tools/mic_state.py       # is the microphone muted / at zero volume?
+python tools/mic_state.py --unmute   # unmute it
+python tools/mic_probe.py       # the actual signal level the microphone delivers
 ```
+
+### The microphone
+
+`config.json` has a `microphone` key: a substring of the capture device name, or `""` for the
+system default.
+
+```json
+"microphone": ""
+```
+
+The available devices are listed in the log at startup. If the microphone stops working — a
+muted input, an unplugged headset, a driver that hands out silence — V2T says so in the log and
+on the tray icon instead of quietly transcribing nothing.
 
 The golden corpus is the recordings in `%APPDATA%/com.pais.handy/recordings` with the
 transcripts Handy stored in `%APPDATA%/com.pais.handy/history.db`. If those are gone, the
@@ -306,6 +323,7 @@ rm -rf build && bash tools/build_release.sh
 | `parakeet: failed to initialize CPU backend` | the engine was not asked to register backends | should not happen; check you rebuilt after the fix in `src/engine/transcribe_api.cpp` |
 | `no model_path in config.json` | the config is missing or empty | copy `config.example.json` to `config.json` and set `model_path` |
 | The mic button never appears | the hotkey is taken by another program | change `hotkey` in `config.json` (e.g. `["ralt","rshift"]`) |
+| Nothing is transcribed, "no sound from the microphone" | the input device is muted, muted in hardware, or the wrong device | `python tools/mic_state.py` shows the state, `python tools/mic_state.py --unmute` unmutes it, `python tools/mic_probe.py` shows the level. Set `microphone` in `config.json` to pick the device (e.g. `"Realtek"`) |
 | The button stays grey while you speak | the mic is muted or the wrong device | Windows → Settings → System → Sound → Input; check the level meter in the log |
 | Nothing is typed | the target window is elevated | `SendInput` cannot reach admin windows — use a normal window |
 | The app never starts | another instance is running | right-click the tray icon (or the mic button) to quit, or end `V2T.exe` in Task Manager |

@@ -47,6 +47,9 @@ class TrayIcon {
 
   void destroy();
 
+  TrayState state() const { return state_; }
+  bool state_is_error() const { return state_ == TrayState::Error; }
+
  private:
   bool add_icon(std::string& err);
   void update_icon(TrayState state);
@@ -55,6 +58,7 @@ class TrayIcon {
   HICON icons_[4] = {nullptr, nullptr, nullptr, nullptr};
   NOTIFYICONDATAW data_{};
   bool created_ = false;
+  TrayState state_ = TrayState::Waiting;
 };
 
 }  // namespace win32

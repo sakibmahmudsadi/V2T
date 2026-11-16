@@ -56,6 +56,9 @@ bool load_config(const std::string& path, Config& config, std::string& err) {
     const std::vector<std::string> keys = value->as_string_list();
     if (!keys.empty()) config.hotkey = keys;
   }
+  if (const json::Value* value = root->find("microphone")) {
+    config.microphone = value->as_string(config.microphone);
+  }
   if (const json::Value* value = root->find("cancel_key")) {
     config.cancel_key = value->as_string(config.cancel_key);
   }
