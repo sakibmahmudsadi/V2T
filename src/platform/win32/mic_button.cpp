@@ -1,5 +1,7 @@
 #include "platform/win32/mic_button.h"
 
+#include "platform/win32/mic_glyph.h"
+
 #include <shellapi.h>
 #include <windowsx.h>
 
@@ -24,51 +26,6 @@ std::wstring widen(const std::string& value) {
   MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), &result[0],
                       needed);
   return result;
-}
-
-// One microphone glyph: a filled capsule (the head), a holder around it, a
-// stem and a base line. Drawn as strokes so it stays readable at 64 px.
-void draw_mic(HDC dc, const RECT& bounds, COLORREF colour) {
-  const int width = bounds.right - bounds.left;
-  const int height = bounds.bottom - bounds.top;
-  const int cx = bounds.left + width / 2;
-
-  const int head_width = width / 3;
-  const int head_height = height / 2;
-  const int head_top = bounds.top + height / 8;
-  const int head_bottom = head_top + head_height;
-
-  const int stroke = std::max(3, width / 14);
-
-  HPEN pen = CreatePen(PS_SOLID, stroke, colour);
-  HPEN old_pen = (HPEN)SelectObject(dc, pen);
-  HBRUSH brush = CreateSolidBrush(colour);
-  HBRUSH old_brush = (HBRUSH)SelectObject(dc, brush);
-
-  // The head: a filled capsule.
-  RoundRect(dc, cx - head_width / 2, head_top, cx + head_width / 2, head_bottom,
-            head_width, head_width);
-
-  // The holder: a U around the lower half of the head.
-  SelectObject(dc, GetStockObject(NULL_BRUSH));
-  const int holder_left = cx - head_width;
-  const int holder_right = cx + head_width;
-  const int holder_top = head_top + head_height / 3;
-  const int holder_bottom = head_bottom + head_width / 2;
-  Arc(dc, holder_left, holder_top, holder_right, holder_bottom, 0, 180, 0, 180);
-
-  // The stem and the base.
-  const int stem_top = holder_bottom - stroke / 2;
-  const int stem_bottom = bounds.bottom - height / 6;
-  MoveToEx(dc, cx, stem_top, nullptr);
-  LineTo(dc, cx, stem_bottom);
-  MoveToEx(dc, cx - head_width / 2, stem_bottom, nullptr);
-  LineTo(dc, cx + head_width / 2, stem_bottom);
-
-  SelectObject(dc, old_brush);
-  SelectObject(dc, old_pen);
-  DeleteObject(brush);
-  DeleteObject(pen);
 }
 
 }  // namespace
@@ -164,14 +121,14 @@ bool MicButton::render_to_file(const std::string& path, MicButtonState state) co
   FillRect(dc, &bounds, background);
   DeleteObject(background);
 
-  COLORREF colour = RGB(210, 210, 216);
+  MicColour colour = MicColour::Idle;
   switch (state) {
-    case MicButtonState::Idle: colour = RGB(198, 200, 210); break;
-    case MicButtonState::Active: colour = RGB(58, 200, 110); break;
-    case MicButtonState::Working: colour = RGB(255, 176, 46); break;
-    case MicButtonState::Attention: colour = RGB(235, 90, 80); break;
+    case MicButtonState::Idle: colour = MicColour::Idle; break;
+    case MicButtonState::Active: colour = MicColour::Active; break;
+    case MicButtonState::Working: colour = MicColour::Working; break;
+    case MicButtonState::Attention: colour = MicColour::Attention; break;
   }
-  draw_mic(dc, bounds, colour);
+  draw_mic_glyph(dc, bounds, mic_colour(colour));
 
   BITMAPINFO info;
   ZeroMemory(&info, sizeof(info));
@@ -228,14 +185,14 @@ void MicButton::paint() {
   //   green = audio is arriving
   //   amber = the model is working
   //   red   = something went wrong
-  COLORREF colour = RGB(210, 210, 216);
+  MicColour colour = MicColour::Idle;
   switch (state_) {
-    case MicButtonState::Idle: colour = RGB(198, 200, 210); break;
-    case MicButtonState::Active: colour = RGB(58, 200, 110); break;
-    case MicButtonState::Working: colour = RGB(255, 176, 46); break;
-    case MicButtonState::Attention: colour = RGB(235, 90, 80); break;
+    case MicButtonState::Idle: colour = MicColour::Idle; break;
+    case MicButtonState::Active: colour = MicColour::Active; break;
+    case MicButtonState::Working: colour = MicColour::Working; break;
+    case MicButtonState::Attention: colour = MicColour::Attention; break;
   }
-  draw_mic(dc, bounds, colour);
+  draw_mic_glyph(dc, bounds, mic_colour(colour));
 
   EndPaint(window_, &ps);
 }

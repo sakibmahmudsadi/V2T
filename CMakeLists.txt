@@ -39,7 +39,9 @@ add_library(ptwin32 STATIC
   src/platform/win32/audio.cpp
   src/platform/win32/hotkey.cpp
   src/platform/win32/mic_button.cpp
+  src/platform/win32/mic_glyph.cpp
   src/platform/win32/paths.cpp
+  src/platform/win32/tray.cpp
   src/platform/win32/typing.cpp
   src/platform/win32/worker_client.cpp
 )

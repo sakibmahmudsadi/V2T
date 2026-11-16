@@ -184,6 +184,13 @@ def main() -> int:
         if not started:
             failures += 1
             print(log[-800:])
+
+        # 5. the tray icon is there, so the app is visible in the notification
+        #    area even when nothing is happening
+        tray = "tray icon created" in log
+        print(f"  {'ok  ' if tray else 'FAIL'} the tray icon is created")
+        if not tray:
+            failures += 1
     finally:
         process.terminate()
         try:

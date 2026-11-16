@@ -20,6 +20,7 @@ memory 60 seconds after each take.
 
 ```
 V2T.exe          the always-on process — 7 MB, no model, no microphone open
+  ├─ tray icon                     (grey waiting · green recording · amber working · red error)
   ├─ Right Ctrl+Right Alt hook      (WH_KEYBOARD_LL, right/left aware)
   ├─ microphone capture             (waveIn, 16 kHz mono, into a growing buffer)
   ├─ the mic button                 (one small button docked to the right edge)

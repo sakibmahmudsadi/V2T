@@ -38,6 +38,7 @@
 #include "platform/win32/hotkey.h"
 #include "platform/win32/mic_button.h"
 #include "platform/win32/paths.h"
+#include "platform/win32/tray.h"
 #include "platform/win32/typing.h"
 #include "platform/win32/worker_client.h"
 
@@ -89,6 +90,7 @@ pt::Config g_config;
 pt::win32::HotkeyListener g_hotkey;
 pt::win32::AudioCapture g_audio;
 pt::win32::MicButton g_mic;
+pt::win32::TrayIcon g_tray;
 pt::win32::WorkerClient g_worker;
 std::thread g_worker_thread;
 std::string g_pipe_name;
@@ -353,6 +355,12 @@ void worker_thread_main() {
 // UI thread
 // ---------------------------------------------------------------------------
 
+// The tray icon mirrors the app state, so a glance at the notification area
+// tells you whether V2T is alive and what it is doing.
+void set_tray(pt::win32::TrayState state, const std::string& tooltip) {
+  g_tray.set_state(state, tooltip);
+}
+
 void apply_filler_rules(const std::string& raw, std::string& text) {
   text = raw;
   if (g_config.filler_removal) {
@@ -377,6 +385,7 @@ void start_dictation() {
   if (!g_audio.start(&on_audio, error)) {
     PT_ERROR("cannot start the microphone: " + error);
     g_shared.state = AppState::Idle;
+    set_tray(pt::win32::TrayState::Error, "V2T — no microphone");
     g_mic.show(g_config.mic_button_edge, error);
     g_mic.set_state(pt::win32::MicButtonState::Attention, error);
     return;
@@ -387,6 +396,7 @@ void start_dictation() {
     g_shared.last_activity = std::chrono::steady_clock::now();
   }
   g_shared.state = AppState::Recording;
+  set_tray(pt::win32::TrayState::Recording, "V2T — recording");
   std::string show_error;
   if (!g_mic.show(g_config.mic_button_edge, show_error)) {
     PT_ERROR("cannot show the mic button: " + show_error);
@@ -409,6 +419,7 @@ void stop_dictation(bool cancelled) {
   g_shared.cv.notify_all();
 
   g_shared.state = AppState::Decoding;
+  set_tray(pt::win32::TrayState::Working, cancelled ? "V2T — cancelled" : "V2T — transcribing");
   g_mic.set_state(pt::win32::MicButtonState::Working, cancelled ? "cancelled" : "transcribing");
 }
 
@@ -456,11 +467,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
 
       g_shared.state = AppState::Idle;
       g_audio.stop();
+      set_tray(pt::win32::TrayState::Waiting, "V2T — waiting for the hotkey");
 
       if (!result->ok) {
         // Something went wrong (no microphone, no model, ...): say so on the
         // button and stay idle.
         PT_ERROR(result->error);
+        set_tray(pt::win32::TrayState::Error, "V2T — " + result->error);
         g_mic.show(g_config.mic_button_edge, result->error);
         g_mic.set_state(pt::win32::MicButtonState::Attention, result->error);
         return 0;
@@ -476,6 +489,28 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_p
       type_result(result->text);
       return 0;
     }
+
+    case pt::win32::kTrayCallbackMessage: {
+      // Left click toggles dictation, right click opens the menu.
+      if (LOWORD(l_param) == WM_RBUTTONUP || LOWORD(l_param) == WM_CONTEXTMENU) {
+        POINT point;
+        GetCursorPos(&point);
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, pt::win32::kTrayCommandQuit, L"Quit V2T");
+        SetForegroundWindow(hwnd);
+        TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, point.x, point.y, 0, hwnd, nullptr);
+        DestroyMenu(menu);
+      } else if (LOWORD(l_param) == WM_LBUTTONDBLCLK) {
+        PostMessage(g_window, WM_APP_TOGGLE, 0, 0);
+      }
+      return 0;
+    }
+
+    case WM_COMMAND:
+      if (LOWORD(w_param) == pt::win32::kTrayCommandQuit) {
+        PostQuitMessage(0);
+      }
+      return 0;
 
     case WM_TIMER:
       if (g_shared.state == AppState::Recording) {
@@ -527,6 +562,20 @@ int main(int argc, char** argv) {
         return 1;
       }
       std::fprintf(stderr, "wrote %s\n", output.c_str());
+
+      // The four tray icons, next to it.
+      const pt::win32::TrayState states[] = {
+          pt::win32::TrayState::Waiting, pt::win32::TrayState::Recording,
+          pt::win32::TrayState::Working, pt::win32::TrayState::Error};
+      const char* names[] = {"waiting", "recording", "working", "error"};
+      for (int t = 0; t < 4; ++t) {
+        const std::string path = output + "." + names[t] + ".bmp";
+        if (!pt::win32::render_tray_icon(path, states[t])) {
+          std::fprintf(stderr, "error: cannot write %s\n", path.c_str());
+          return 1;
+        }
+        std::fprintf(stderr, "wrote %s\n", path.c_str());
+      }
       return 0;
     } else if (arg == "--help" || arg == "-h") {
       std::fprintf(stderr,
@@ -590,6 +639,16 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // The tray icon: the app's permanent, glanceable presence.
+  {
+    std::string tray_error;
+    if (!g_tray.create(g_window, "V2T — waiting for the hotkey", tray_error)) {
+      PT_ERROR("cannot create the tray icon: " + tray_error);
+    } else {
+      PT_INFO("tray icon created");
+    }
+  }
+
   // The mic button: click stops the recording, right-click quits.
   g_mic.set_callbacks(
       [] { PostMessage(g_window, WM_APP_STOP, 0, 0); },
@@ -608,6 +667,7 @@ int main(int argc, char** argv) {
   }
 
   PT_INFO("shutting down");
+  g_tray.destroy();
   g_audio.stop();
   {
     std::lock_guard<std::mutex> lock(g_shared.mutex);
