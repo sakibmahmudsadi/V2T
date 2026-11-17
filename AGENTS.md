@@ -80,8 +80,9 @@ headers.
 - PCM contract: **mono float32 @ 16 000 Hz**. The library does not resample — we do.
 - **Decode path matters.** For this model the *live streaming* decode and the one-shot batch decode
   produce different text (the batch decode truncates and drops punctuation). Handy uses streaming,
-  so we do too: `transcribe_stream_begin` → `transcribe_stream_feed` in **480-sample (30 ms)
-  frames** → `transcribe_stream_finalize` → `transcribe_stream_get_text`. The one-shot batch run
+  so we do too: `transcribe_stream_begin` → `transcribe_stream_feed` in **512-sample (32 ms)
+  frames** (the default; `--frame` changes it) → `transcribe_stream_finalize` →
+  `transcribe_stream_get_text`. The one-shot batch run
   stays as the fallback for when a stream yields nothing.
 
 ## 4. Build, test, run
@@ -141,13 +142,36 @@ Commit after every task in the plan. Never commit `engine/`, `build/`, or `logs/
 
 ## 7. Current state
 
+All milestones are done and pushed to `github.com/sakibmahmudsadi/V2T` (branch `main`).
+
 - **Milestone 0 (done):** Handy's updater disabled (`HANDY_DISABLE_UPDATER=1`,
   `update_checks_enabled: false`, `Handy Offline.cmd`).
-- **Milestone 1 (this plan):** engine binding + offline CLI transcription + golden corpus.
-- **Milestone 2:** WASAPI capture, Right Ctrl+Right Alt hotkey, `SendInput` typing.
-- **Milestone 3:** controller/worker split with a 60 s idle unload.
-- **Milestone 4:** live streaming + the single mic button.
-- **Milestone 5:** config file, autostart, packaging, README.
+- **Milestone 1 (done):** engine binding + offline CLI transcription + golden corpus + edge cases
+  + self-test.
+- **Milestones 2–3 (done):** hotkey hook, waveIn capture, SendInput typing; the controller/worker
+  split with a 60 s idle unload; the worker is reused between takes (the model loads once).
+- **Milestone 4 (done):** live streaming decode (primary path, batch fallback), the mic button,
+  the tray icon (states mirrored, runtime-drawn glyph shared by both).
+- **Config file (`config.json`), README, BUILD.md (the rebuild guide).**
+- **Latest work:** the silent-microphone watchdog — see §7a and `CLAUDE.md`.
+
+## 7a. Bugs that were real — do not reintroduce
+
+1. **waveIn deadlock.** `waveInReset` ran while the waveIn callback was inside
+   `waveInAddBuffer`. Fixed with the `stopping_` / `in_add_buffer_` guards in
+   `src/platform/win32/audio.cpp`. Do not simplify them away.
+2. **Pipe-write deadlock.** The shared controller/worker mutex was held across a blocking pipe
+   write. Never hold it across a write that can block.
+3. **Double audio send.** Audio crossed the pipe twice (stream and batch both sent it). Fixed:
+   the worker accumulates stream audio and `batch` decodes its own copy — audio crosses the pipe
+   exactly once.
+4. **Idle unload mid-take.** The 60 s idle timer killed the worker while a take was running. The
+   timer now only fires when no take is active.
+5. **Frame-size red herring.** A sweep over 160–960 samples produced identical WER. The residual
+   ~1.56 % corpus WER vs Handy is because Handy feeds only VAD-filtered speech frames. Do not
+   "fix" accuracy by tuning `--frame`.
+6. **Test design.** Controller tests check mic-button *visibility* (`IsWindowVisible` — hidden
+   windows are created once and reused) and wait on log content, not fixed sleeps.
 
 ## 8. Before calling any work done
 
